@@ -4,6 +4,7 @@ import { Logo } from "@/components/Logo";
 import { useAuth } from "@/context/AuthContext";
 import AIAssistant from "@/components/AIAssistant";
 import StreakBadge from "@/components/StreakBadge";
+import CommandPalette from "@/components/CommandPalette";
 import { api } from "@/lib/api";
 import {
   Sun,
@@ -18,6 +19,9 @@ import {
   Moon,
   Plus,
   Crown,
+  Compass,
+  BookOpen,
+  Command,
 } from "lucide-react";
 
 const NAV = [
@@ -25,6 +29,9 @@ const NAV = [
   { to: "/tasks", label: "Tasks", icon: CheckCircle2, testid: "nav-tasks" },
   { to: "/calendar", label: "Calendar", icon: CalendarDays, testid: "nav-calendar" },
   { to: "/focus", label: "Focus", icon: Target, testid: "nav-focus" },
+  { to: "/journal", label: "Journal", icon: BookOpen, testid: "nav-journal" },
+  { to: "/goals", label: "Goals", icon: Compass, testid: "nav-goals" },
+  { to: "/insights", label: "Insights", icon: LineChart, testid: "nav-insights" },
   { to: "/review", label: "Weekly Review", icon: LineChart, testid: "nav-review" },
 ];
 
@@ -32,6 +39,7 @@ export default function AppShell({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [aiOpen, setAiOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [streak, setStreak] = useState({ current: 0, longest: 0 });
 
@@ -42,6 +50,18 @@ export default function AppShell({ children }) {
         setStreak(data);
       } catch {}
     })();
+  }, []);
+
+  // Global ⌘K / Ctrl+K
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const toggleTheme = () => {
@@ -161,6 +181,9 @@ export default function AppShell({ children }) {
       <div className="md:hidden fixed top-0 inset-x-0 z-40 glass border-b border-velari-border px-4 py-3 flex items-center justify-between">
         <Link to="/today"><Logo size={22} /></Link>
         <div className="flex items-center gap-2">
+          <button onClick={() => setPaletteOpen(true)} className="p-2 rounded-full bg-velari-surfaceAlt" data-testid="mobile-palette">
+            <Command size={16} />
+          </button>
           <button onClick={() => setAiOpen(true)} className="p-2 rounded-full bg-velari-surfaceAlt" data-testid="mobile-ai">
             <Sparkles size={16} />
           </button>
@@ -175,6 +198,18 @@ export default function AppShell({ children }) {
         {children}
       </main>
 
+      {/* Floating ⌘K (desktop) */}
+      <button
+        onClick={() => setPaletteOpen(true)}
+        className="hidden md:flex fixed bottom-6 right-44 z-40 items-center gap-2 px-3.5 py-3 rounded-full bg-velari-surface border border-velari-border shadow-elevated hover:-translate-y-0.5 transition-transform ease-velari"
+        data-testid="floating-palette-btn"
+        title="Command palette"
+      >
+        <Command size={14} />
+        <span className="font-display text-[13px] tracking-tight">Quick</span>
+        <span className="text-[10.5px] tracking-[0.18em] uppercase text-velari-textSoft border-l border-velari-border pl-2 ml-1">⌘K</span>
+      </button>
+
       {/* Floating AI button (desktop) */}
       <button
         onClick={() => setAiOpen(true)}
@@ -187,7 +222,7 @@ export default function AppShell({ children }) {
 
       {/* Mobile bottom nav */}
       <nav className="md:hidden fixed bottom-3 inset-x-3 z-40 glass rounded-full p-1.5 flex items-center justify-around" data-testid="mobile-nav">
-        {NAV.map(({ to, icon: Icon, testid }) => (
+        {NAV.slice(0, 5).map(({ to, icon: Icon, testid }) => (
           <NavLink
             key={to}
             to={to}
@@ -202,6 +237,14 @@ export default function AppShell({ children }) {
       </nav>
 
       <AIAssistant open={aiOpen} onClose={() => setAiOpen(false)} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNow={() => navigate("/today?now=1")}
+        onCheckin={() => navigate("/today?checkin=1")}
+        onCapture={() => navigate("/today?capture=1")}
+        onShutdown={() => navigate("/today?shutdown=1")}
+      />
     </div>
   );
 }

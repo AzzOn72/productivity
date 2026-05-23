@@ -8,6 +8,7 @@ import {
   Sparkles,
   Search,
   ChevronDown,
+  Split,
 } from "lucide-react";
 
 const PRIORITY_OPTIONS = ["low", "medium", "high", "urgent"];
@@ -87,6 +88,19 @@ export default function Tasks() {
   const updatePriority = async (t, priority) => {
     setTasks((arr) => arr.map((x) => x.task_id === t.task_id ? { ...x, priority } : x));
     try { await api.patch(`/tasks/${t.task_id}`, { priority }); } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const decompose = async (t) => {
+    toast.message(`Splitting "${t.title}"…`);
+    try {
+      const { data } = await api.post("/ai/decompose", { task_id: t.task_id });
+      if (!data.count) {
+        toast.message("No clean split found.");
+        return;
+      }
+      setTasks((arr) => [...data.subtasks, ...arr]);
+      toast.success(`${data.count} sub-step${data.count === 1 ? "" : "s"} added.`);
+    } catch (e) { toast.error(formatApiError(e)); }
   };
 
   return (
@@ -212,12 +226,24 @@ export default function Tasks() {
                 {t.completed && <Check size={12} className="text-white pop" />}
               </button>
               <div className="flex-1 min-w-0">
-                <div className={`text-[14.5px] truncate ${t.completed ? "line-through text-velari-textSoft" : ""}`}>{t.title}</div>
+                <div className={`text-[14.5px] truncate ${t.completed ? "line-through text-velari-textSoft" : ""} ${t.parent_task_id ? "pl-3 border-l-2 border-velari-brand/30" : ""}`}>
+                  {t.title}
+                </div>
                 {t.notes && <div className="text-[12px] text-velari-textSoft truncate">{t.notes}</div>}
               </div>
               <div className="flex items-center gap-3">
                 <PriorityPill task={t} onChange={updatePriority} />
                 <div className="text-[12px] text-velari-textSoft w-14 text-right">{t.estimated_minutes}m</div>
+                {!t.parent_task_id && !t.completed && (
+                  <button
+                    onClick={() => decompose(t)}
+                    data-testid={`tasks-decompose-${t.task_id}`}
+                    title="AI split into sub-steps"
+                    className="opacity-0 group-hover:opacity-100 text-velari-textSoft hover:text-velari-brand transition-opacity"
+                  >
+                    <Split size={14} />
+                  </button>
+                )}
                 <button onClick={() => remove(t)} data-testid={`tasks-delete-${t.task_id}`} className="opacity-0 group-hover:opacity-100 text-velari-textSoft hover:text-red-600 transition-opacity">
                   <Trash2 size={14} />
                 </button>

@@ -16,6 +16,9 @@ import Focus from "@/pages/Focus";
 import WeeklyReview from "@/pages/WeeklyReview";
 import Pricing from "@/pages/Pricing";
 import Settings from "@/pages/Settings";
+import Insights from "@/pages/Insights";
+import Goals from "@/pages/Goals";
+import Journal from "@/pages/Journal";
 
 import "@/App.css";
 
@@ -43,6 +46,9 @@ function AppRouter() {
       <Route path="/calendar" element={<ProtectedRoute><AppShell><CalendarPage /></AppShell></ProtectedRoute>} />
       <Route path="/focus" element={<ProtectedRoute><Focus /></ProtectedRoute>} />
       <Route path="/review" element={<ProtectedRoute><AppShell><WeeklyReview /></AppShell></ProtectedRoute>} />
+      <Route path="/insights" element={<ProtectedRoute><AppShell><Insights /></AppShell></ProtectedRoute>} />
+      <Route path="/goals" element={<ProtectedRoute><AppShell><Goals /></AppShell></ProtectedRoute>} />
+      <Route path="/journal" element={<ProtectedRoute><AppShell><Journal /></AppShell></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><AppShell><Settings /></AppShell></ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />

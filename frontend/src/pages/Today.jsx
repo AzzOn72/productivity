@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Plus,
@@ -25,6 +25,9 @@ import StreakBadge from "@/components/StreakBadge";
 import OverloadBanner from "@/components/OverloadBanner";
 import MorningRitual from "@/components/MorningRitual";
 import ShutdownRitual from "@/components/ShutdownRitual";
+import NowCard from "@/components/NowCard";
+import NudgesStrip from "@/components/NudgesStrip";
+import MoodCheckIn from "@/components/MoodCheckIn";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const longDate = () =>
@@ -67,6 +70,8 @@ export default function Today() {
   const [events, setEvents] = useState([]);
   const [showMorning, setShowMorning] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
+  const [showCheckin, setShowCheckin] = useState(false);
+  const [params, setParams] = useSearchParams();
 
   const date = todayISO();
   const capacity = (user?.daily_capacity || 4) * 60;
@@ -95,6 +100,19 @@ export default function Today() {
   }, [date]);
 
   useEffect(() => { load(); }, [load]);
+
+  // React to command-palette intents passed via URL
+  useEffect(() => {
+    if (params.get("shutdown")) { setShowShutdown(true); params.delete("shutdown"); setParams(params, { replace: true }); }
+    if (params.get("checkin")) { setShowCheckin(true); params.delete("checkin"); setParams(params, { replace: true }); }
+    if (params.get("capture")) {
+      params.delete("capture"); setParams(params, { replace: true });
+      const el = document.querySelector('[data-testid="quick-capture-input"]');
+      if (el) { el.focus(); el.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    }
+    // 'now' just brings the user to Today; NowCard is already visible
+    if (params.get("now")) { params.delete("now"); setParams(params, { replace: true }); }
+  }, [params, setParams]);
 
   // Morning ritual trigger: before noon, fresh visit, not yet planned
   useEffect(() => {
@@ -283,6 +301,18 @@ export default function Today() {
         </div>
       </div>
 
+      {/* Smart nudges strip */}
+      <div className="mb-5 fade-up">
+        <NudgesStrip
+          onCheckin={() => setShowCheckin(true)}
+          onShutdown={() => setShowShutdown(true)}
+          onCapture={() => {
+            const el = document.querySelector('[data-testid="quick-capture-input"]');
+            if (el) { el.focus(); el.scrollIntoView({ behavior: "smooth", block: "center" }); }
+          }}
+        />
+      </div>
+
       {/* Hero: Control Center */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-6 fade-up">
         <div className="lg:col-span-8 card-soft elevated p-6 sm:p-7">
@@ -349,6 +379,11 @@ export default function Today() {
         </Link>
       </div>
 
+      {/* "What now?" — the magical single-action prompt */}
+      <div className="mb-6 fade-up">
+        <NowCard />
+      </div>
+
       {/* Top 3 — iconic priorities */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         <section className="lg:col-span-8 fade-up">
@@ -406,6 +441,7 @@ export default function Today() {
 
         {/* Right column: energy schedule + habits + quick capture */}
         <aside className="lg:col-span-4 space-y-5 fade-up">
+          <MoodCheckIn />
           <div className="card-soft elevated p-6">
             <div className="flex items-center justify-between mb-3">
               <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Energy schedule</div>
@@ -509,6 +545,15 @@ export default function Today() {
         defaultIntention={topThree[0]?.title || ""}
       />
       <ShutdownRitual open={showShutdown} onClose={() => setShowShutdown(false)} onSaved={() => load()} />
+
+      {showCheckin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" data-testid="checkin-modal">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowCheckin(false)} />
+          <div className="relative w-full max-w-md fade-up">
+            <MoodCheckIn open onClose={() => setShowCheckin(false)} onSaved={() => setShowCheckin(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

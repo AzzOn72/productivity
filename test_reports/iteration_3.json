@@ -1,0 +1,45 @@
+{
+  "summary": "Velari v3 full-stack regression. Backend: 42/42 pytest pass (30 v1/v2 + 12 new v3) — Goals CRUD (create/list/patch/delete with task untag on delete), Mood/Energy check-in (upsert today + history), Journal (with AI extraction of 2 tasks from actionable text, source='journal'), AI What-now (non-empty action), AI Decompose (3-5 subtasks with parent_task_id linked + source='decompose'), Insights /patterns /burnout /personality /goal-alignment (all shapes verified including 0-goal edge case), Nudges (kinds bounded; fresh user reliably sees nudge-goal), and Task model v3 fields (goal_id/parent_task_id accepted on POST/PATCH; goal progress_pct updates when linked task completes). Frontend: Today (now-card with free-15/30/60/120 + refresh, nudges-strip visible, mood-checkin save -> 'Checked in' toast), Goals (create+weight+delete and untag verified), Journal (extract created 2 tasks -> 'Captured · 2 tasks extracted' toast), Insights /insights renders personality=Architect / burnout 0 Calm / patterns / goal-alignment, Command Palette opens via Cmd/Ctrl+K with palette-input + palette-tasks/now/checkin, decompose icons present on top-level tasks, sidebar nav-journal/goals/insights and floating-palette-btn + floating-ai-btn all visible. One minor testid naming discrepancy found: spec calls it palette-autoplan but implementation renders palette-auto.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/ai/auto-plan", "issue": "Carry-over: late-day window edge case still produces created=0 with no explanation."},
+      {"endpoint": "/api/events GET", "issue": "Carry-over: boolean precedence in start/end filter (`start <= e['start'] <= end or start <= e['end'] <= end`). Frontend doesn't use filter so user-invisible."},
+      {"endpoint": "CORSMiddleware", "issue": "Carry-over: env-derived origin_list/allow_credentials computed but middleware hard-coded to allow_origins=['*'] / allow_credentials=False. Dead branch."},
+      {"endpoint": "/api/nudges", "issue": "Streak nudge gate at hr>=18 + streak>=2 + today_done==0 is reasonable but `completed_at >= today` uses string compare against a YYYY-MM-DD date prefix (not a full ISO ts), so any same-day completed_at would qualify (probably intentional). Worth re-reading if late-night UTC users see false positives."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Command Palette auto-plan", "issue": "Spec asks for data-testid=palette-autoplan but CommandPalette.jsx renders id 'auto' so the rendered testid is palette-auto. Either rename the id to 'autoplan' or update the spec/tests. Today no FE caller breaks because all clicks go through onSelect.", "affected_selectors": ["palette-autoplan vs palette-auto"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Cosmetic) Rename CommandPalette action id 'auto' to 'autoplan' so the data-testid matches the v3 spec (palette-autoplan).",
+    "(Carry-over v1/v2) Tighten CORS env handling, fix /api/events GET start/end precedence, and clearer message for after-end-of-day auto-plan."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1875 lines with 4 v3 endpoint groups added. Strongly recommend splitting into routers (auth, tasks, habits, events, focus, reviews, ai, billing, insights, rituals, goals, checkin, journal, nudges) — this is the biggest tech-debt item right now.",
+    "POST /api/journal blocks on AI call serially even when text is non-actionable — consider returning the entry immediately and extracting asynchronously, or short-circuit when text has no verbs.",
+    "/ai/decompose: parsing relies on `re.search(r'\\{.*\\}', reply, re.S)` greedy → can choke on triple-backtick fenced JSON. Works on Claude today; defensive `re.findall` or strip ``` fences would be safer.",
+    "Goal progress_pct uses created_at >= cutoff for the denominator but completed_at >= cutoff for the numerator → a task created 20 days ago and completed yesterday counts in numerator but not denominator (progress can exceed 100). Use the same window or take the max.",
+    "Nudge `goal` is rendered whenever goals==0, regardless of hour — fine, but combined with the 'capture' nudge (hr<18) a brand-new user before 14:00 UTC will see 3/3 nudges (checkin + capture + goal) which is exactly the cap. If a 4th rule is added later, the order in nudges[:3] silently determines priority — consider an explicit priority field.",
+    "/api/billing/upgrade dev override remains live (not env-gated) — same v2 finding. ENABLE_DEV_BILLING flag would prevent prod self-grants."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (appended 12 v3 test functions: TestGoals, TestCheckin, TestJournal, TestAiNow, TestAiDecompose, TestInsights (patterns/burnout/personality/goal-alignment), TestNudges (admin + fresh-user), TestTaskModelV3Fields)"
+  ],
+  "success_rate": {"backend": "100% (42/42)", "frontend": "100% on all v3 critical flows; 1 testid naming mismatch flagged (palette-autoplan vs palette-auto)"},
+  "test_credentials": "Admin: founder@velari.app / VelariAdmin2026! (plan=elite). No mutation persisted by tests (all TEST_ data + goals + journal entries cleaned up in teardown).",
+  "seed_data_creation": "All v3 test data created with TEST_ prefix and removed in fixture teardown. Admin mood-checkin was set to mood=5, energy=5 by the frontend test (today only — auto-overwritten on next check-in). No long-lived test pollution.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v3 backend 42/42 green via /app/backend/tests/backend_test.py. Admin has a 1d streak, ~6 focus sessions/mo, 5 reviews. Insights personality = 'Architect' currently. The only spec/impl gap found in v3 is CommandPalette action id 'auto' (testid palette-auto) vs the spec's palette-autoplan. /ai/decompose and /journal extraction both work with Claude Sonnet 4.5 via EMERGENT_LLM_KEY. Use new_user fixture for the 'fresh user sees nudge-goal' assertion — admin already has goals=0 too, so it works for admin as well today.",
+  "rca of the issue": "No regressions introduced by v3. The single FE flag (palette-autoplan) is a naming mismatch, not a functional bug — the palette item renders, navigates and triggers /ai/auto-plan correctly when clicked; only the data-testid is 'palette-auto'. Fix is a 1-char change in CommandPalette.jsx (id 'auto' -> 'autoplan')."
+}

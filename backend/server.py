@@ -177,9 +177,11 @@ class TaskIn(BaseModel):
     estimated_minutes: Optional[int] = 30
     due_date: Optional[str] = None  # YYYY-MM-DD
     project_id: Optional[str] = None
+    goal_id: Optional[str] = None
     tags: List[str] = []
     energy: Literal["low", "medium", "high"] = "medium"
     scheduled_for: Optional[str] = None  # YYYY-MM-DD (which day on plan)
+    parent_task_id: Optional[str] = None  # for subtasks
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -188,11 +190,13 @@ class TaskUpdate(BaseModel):
     estimated_minutes: Optional[int] = None
     due_date: Optional[str] = None
     project_id: Optional[str] = None
+    goal_id: Optional[str] = None
     tags: Optional[List[str]] = None
     energy: Optional[str] = None
     scheduled_for: Optional[str] = None
     completed: Optional[bool] = None
     actual_minutes: Optional[int] = None
+    parent_task_id: Optional[str] = None
 
 class ProjectIn(BaseModel):
     name: str
@@ -256,6 +260,47 @@ class ShutdownRitualIn(BaseModel):
     tomorrows_intention: Optional[str] = ""
     energy: int = 6
     notes: Optional[str] = ""
+
+
+class NowRequest(BaseModel):
+    free_minutes: Optional[int] = 30
+    location: Optional[str] = None  # "home", "office", "transit", "anywhere"
+
+
+class DecomposeIn(BaseModel):
+    task_id: str
+
+
+class GoalIn(BaseModel):
+    title: str
+    why: Optional[str] = ""
+    weight: int = Field(default=5, ge=1, le=10)
+    color: str = "#C86B52"
+    icon: Optional[str] = "compass"
+    target_date: Optional[str] = None
+
+
+class GoalUpdate(BaseModel):
+    title: Optional[str] = None
+    why: Optional[str] = None
+    weight: Optional[int] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    target_date: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class CheckinIn(BaseModel):
+    mood: int = Field(ge=1, le=5)  # 1 = low, 5 = vivid
+    energy: int = Field(ge=1, le=5)
+    note: Optional[str] = ""
+
+
+class JournalIn(BaseModel):
+    text: str
+    mood: Optional[int] = None
+    extract_tasks: bool = True
+
 
 
 
@@ -1104,6 +1149,652 @@ async def billing_plan(current=Depends(get_current_user)):
 
 
 # ============================================================
+# GOALS — Top-level life directions
+# ============================================================
+@api.get("/goals")
+async def list_goals(current=Depends(get_current_user)):
+    goals = await db.goals.find(
+        {"user_id": current["user_id"], "archived": {"$ne": True}}, {"_id": 0}
+    ).sort("weight", -1).to_list(50)
+    # Attach progress: % of tasks completed in last 14 days that are tagged to each goal
+    cutoff = (now_utc() - timedelta(days=14)).isoformat()
+    for g in goals:
+        total = await db.tasks.count_documents({
+            "user_id": current["user_id"],
+            "goal_id": g["goal_id"],
+            "created_at": {"$gte": cutoff},
+        })
+        done = await db.tasks.count_documents({
+            "user_id": current["user_id"],
+            "goal_id": g["goal_id"],
+            "completed": True,
+            "completed_at": {"$gte": cutoff},
+        })
+        g["tasks_total_14d"] = total
+        g["tasks_done_14d"] = done
+        g["progress_pct"] = round((done / total) * 100) if total else 0
+    return goals
+
+
+@api.post("/goals")
+async def create_goal(payload: GoalIn, current=Depends(get_current_user)):
+    goal = {
+        "goal_id": new_id("goal"),
+        "user_id": current["user_id"],
+        **payload.model_dump(),
+        "archived": False,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.goals.insert_one(goal)
+    goal.pop("_id", None)
+    return goal
+
+
+@api.patch("/goals/{goal_id}")
+async def update_goal(goal_id: str, payload: GoalUpdate, current=Depends(get_current_user)):
+    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    res = await db.goals.update_one(
+        {"goal_id": goal_id, "user_id": current["user_id"]}, {"$set": update}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return await db.goals.find_one({"goal_id": goal_id}, {"_id": 0})
+
+
+@api.delete("/goals/{goal_id}")
+async def delete_goal(goal_id: str, current=Depends(get_current_user)):
+    await db.goals.delete_one({"goal_id": goal_id, "user_id": current["user_id"]})
+    # Untag tasks
+    await db.tasks.update_many(
+        {"user_id": current["user_id"], "goal_id": goal_id},
+        {"$unset": {"goal_id": ""}},
+    )
+    return {"ok": True}
+
+
+# ============================================================
+# MOOD / EMOTIONAL CHECK-IN
+# ============================================================
+@api.post("/checkin")
+async def save_checkin(payload: CheckinIn, current=Depends(get_current_user)):
+    today = now_utc().date().isoformat()
+    doc = {
+        "checkin_id": new_id("chk"),
+        "user_id": current["user_id"],
+        "date": today,
+        **payload.model_dump(),
+        "created_at": now_utc().isoformat(),
+    }
+    # Upsert today's
+    await db.checkins.update_one(
+        {"user_id": current["user_id"], "date": today},
+        {"$set": doc},
+        upsert=True,
+    )
+    return doc
+
+
+@api.get("/checkin/today")
+async def get_today_checkin(current=Depends(get_current_user)):
+    today = now_utc().date().isoformat()
+    doc = await db.checkins.find_one({"user_id": current["user_id"], "date": today}, {"_id": 0})
+    return doc or {"present": False}
+
+
+@api.get("/checkin/history")
+async def checkin_history(current=Depends(get_current_user)):
+    items = await db.checkins.find(
+        {"user_id": current["user_id"]}, {"_id": 0}
+    ).sort("date", -1).limit(30).to_list(30)
+    return items
+
+
+# ============================================================
+# JOURNAL — Frictionless capture
+# ============================================================
+@api.post("/journal")
+async def create_journal(payload: JournalIn, current=Depends(get_current_user)):
+    extracted_task_ids: List[str] = []
+    if payload.extract_tasks and payload.text.strip():
+        try:
+            chat = LlmChat(
+                api_key=os.environ["EMERGENT_LLM_KEY"],
+                session_id=new_id("journal"),
+                system_message=(
+                    "Extract concrete actionable tasks from a journal entry. "
+                    "Return JSON only: {tasks: [{title, priority(low|medium|high|urgent), "
+                    "estimated_minutes(int), energy(low|medium|high)}]} — max 5 tasks. "
+                    "If no tasks, return {tasks: []}. No prose."
+                ),
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            reply = await chat.send_message(UserMessage(text=payload.text))
+            import json
+            import re
+            m = re.search(r"\{.*\}", reply, re.S)
+            if m:
+                data = json.loads(m.group(0))
+                for t in (data.get("tasks") or [])[:5]:
+                    task = {
+                        "task_id": new_id("task"),
+                        "user_id": current["user_id"],
+                        "title": (t.get("title") or "").strip()[:200],
+                        "priority": t.get("priority", "medium"),
+                        "estimated_minutes": int(t.get("estimated_minutes") or 30),
+                        "energy": t.get("energy", "medium"),
+                        "completed": False,
+                        "source": "journal",
+                        "scheduled_for": now_utc().date().isoformat(),
+                        "created_at": now_utc().isoformat(),
+                        "completed_at": None,
+                    }
+                    if task["title"]:
+                        await db.tasks.insert_one(task)
+                        extracted_task_ids.append(task["task_id"])
+        except Exception as e:
+            log.warning(f"journal extract failed: {e}")
+
+    entry = {
+        "entry_id": new_id("j"),
+        "user_id": current["user_id"],
+        "text": payload.text,
+        "mood": payload.mood,
+        "extracted_task_ids": extracted_task_ids,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.journal.insert_one(entry)
+    entry.pop("_id", None)
+    return entry
+
+
+@api.get("/journal")
+async def list_journal(current=Depends(get_current_user)):
+    return await db.journal.find(
+        {"user_id": current["user_id"]}, {"_id": 0}
+    ).sort("created_at", -1).limit(60).to_list(60)
+
+
+@api.delete("/journal/{entry_id}")
+async def delete_journal(entry_id: str, current=Depends(get_current_user)):
+    await db.journal.delete_one({"entry_id": entry_id, "user_id": current["user_id"]})
+    return {"ok": True}
+
+
+# ============================================================
+# AI — "What now?"
+# ============================================================
+@api.post("/ai/now")
+async def ai_now(payload: NowRequest, current=Depends(get_current_user)):
+    """Single-best-action prompt — the magical 'what should I do right now?'"""
+    today = now_utc().date().isoformat()
+    open_tasks = await db.tasks.find({
+        "user_id": current["user_id"],
+        "completed": False,
+        "$or": [{"scheduled_for": today}, {"due_date": today}],
+    }, {"_id": 0}).to_list(50)
+    checkin = await db.checkins.find_one(
+        {"user_id": current["user_id"], "date": today}, {"_id": 0}
+    ) or {}
+    free_min = payload.free_minutes or 30
+
+    if not open_tasks:
+        return {
+            "action": "Capture one intention.",
+            "task_id": None,
+            "rationale": "Nothing scheduled. Decide one thing that matters.",
+            "minutes": min(5, free_min),
+        }
+
+    summary = "\n".join([
+        f"- {t['task_id']}: {t['title']} (priority={t.get('priority','medium')}, "
+        f"est={t.get('estimated_minutes',30)}m, energy={t.get('energy','medium')})"
+        for t in open_tasks
+    ])
+    hr = now_utc().hour
+    mood_line = f"mood {checkin.get('mood','?')}, energy {checkin.get('energy','?')}" if checkin else "no check-in"
+    prompt = (
+        f"Current hour: {hr}. Free time: {free_min}m. User: {mood_line}. "
+        f"Chronotype: {current.get('chronotype','balanced')}.\n"
+        f"Open tasks:\n{summary}\n\n"
+        "Pick the SINGLE best next task that fits the free time and energy. "
+        "Reply with JSON only: {task_id, action: '<= 7 word imperative', "
+        "rationale: '<= 14 words', minutes: int}."
+    )
+    try:
+        chat = _llm()
+        reply = await chat.send_message(UserMessage(text=prompt))
+        import json
+        import re
+        m = re.search(r"\{.*\}", reply, re.S)
+        if m:
+            data = json.loads(m.group(0))
+            return {
+                "task_id": data.get("task_id"),
+                "action": (data.get("action") or open_tasks[0]["title"])[:80],
+                "rationale": (data.get("rationale") or "")[:160],
+                "minutes": int(data.get("minutes") or min(free_min, open_tasks[0].get("estimated_minutes") or 30)),
+            }
+    except Exception as e:
+        log.warning(f"/ai/now fallback: {e}")
+    # Fallback: highest priority task
+    pr = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+    open_tasks.sort(key=lambda t: pr.get(t.get("priority", "medium"), 2))
+    t = open_tasks[0]
+    return {
+        "task_id": t["task_id"],
+        "action": t["title"][:80],
+        "rationale": "Highest priority for this hour.",
+        "minutes": min(free_min, int(t.get("estimated_minutes") or 30)),
+    }
+
+
+# ============================================================
+# AI — Decompose a task into substeps
+# ============================================================
+@api.post("/ai/decompose")
+async def ai_decompose(payload: DecomposeIn, current=Depends(get_current_user)):
+    parent = await db.tasks.find_one(
+        {"task_id": payload.task_id, "user_id": current["user_id"]}, {"_id": 0}
+    )
+    if not parent:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    prompt = (
+        f"Task: {parent['title']}. "
+        f"Notes: {parent.get('notes','') or '(none)'}. "
+        f"Estimate: {parent.get('estimated_minutes', 30)}m.\n"
+        "Decompose into 3–5 concrete sub-steps. JSON only: "
+        "{steps: [{title (<= 7 words), estimated_minutes (int)}]}. "
+        "Total minutes should roughly equal the parent estimate."
+    )
+    created = []
+    try:
+        chat = _llm()
+        reply = await chat.send_message(UserMessage(text=prompt))
+        import json
+        import re
+        m = re.search(r"\{.*\}", reply, re.S)
+        data = json.loads(m.group(0)) if m else {"steps": []}
+        for s in (data.get("steps") or [])[:5]:
+            sub = {
+                "task_id": new_id("task"),
+                "user_id": current["user_id"],
+                "title": (s.get("title") or "").strip()[:160],
+                "estimated_minutes": int(s.get("estimated_minutes") or 15),
+                "priority": parent.get("priority", "medium"),
+                "energy": parent.get("energy", "medium"),
+                "parent_task_id": parent["task_id"],
+                "goal_id": parent.get("goal_id"),
+                "scheduled_for": parent.get("scheduled_for") or now_utc().date().isoformat(),
+                "completed": False,
+                "source": "decompose",
+                "created_at": now_utc().isoformat(),
+                "completed_at": None,
+            }
+            if sub["title"]:
+                await db.tasks.insert_one(sub)
+                created.append({k: v for k, v in sub.items() if k != "_id"})
+    except Exception as e:
+        log.error(f"decompose error: {e}")
+        raise HTTPException(status_code=500, detail="Could not decompose right now.")
+    return {"subtasks": created, "count": len(created)}
+
+
+# ============================================================
+# INSIGHTS — Patterns, Burnout, Personality, Goal Alignment
+# ============================================================
+@api.get("/insights/patterns")
+async def insights_patterns(current=Depends(get_current_user)):
+    user_id = current["user_id"]
+    cutoff = (now_utc() - timedelta(days=30)).isoformat()
+
+    completed = await db.tasks.find(
+        {"user_id": user_id, "completed": True, "completed_at": {"$gte": cutoff}},
+        {"_id": 0, "completed_at": 1, "priority": 1},
+    ).to_list(2000)
+
+    # Best day-of-week
+    dow_counts = [0] * 7  # Mon-Sun
+    for t in completed:
+        try:
+            d = datetime.fromisoformat(t["completed_at"])
+            dow_counts[d.weekday()] += 1
+        except Exception:
+            pass
+    best_dow_idx = max(range(7), key=lambda i: dow_counts[i]) if any(dow_counts) else None
+    DOW = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    best_dow = DOW[best_dow_idx] if best_dow_idx is not None else None
+
+    # Best hour band (focus minutes)
+    sessions = await db.focus_sessions.find(
+        {"user_id": user_id, "started_at": {"$gte": cutoff}},
+        {"_id": 0, "started_at": 1, "completed_minutes": 1, "interrupted": 1},
+    ).to_list(2000)
+    hour_min = [0] * 24
+    interrupted_count = 0
+    total_session_min = 0
+    for s in sessions:
+        try:
+            h = datetime.fromisoformat(s["started_at"]).hour
+            cm = int(s.get("completed_minutes") or 0)
+            hour_min[h] += cm
+            total_session_min += cm
+            if s.get("interrupted"):
+                interrupted_count += 1
+        except Exception:
+            pass
+    best_hour = max(range(24), key=lambda i: hour_min[i]) if any(hour_min) else None
+    best_hour_band = f"{best_hour:02d}:00–{(best_hour+1) % 24:02d}:00" if best_hour is not None else None
+
+    avg_session_min = round(total_session_min / len(sessions)) if sessions else 0
+    interrupt_rate = round((interrupted_count / len(sessions)) * 100) if sessions else 0
+
+    # Completion rate by priority (last 30d)
+    by_priority = {}
+    for p in ["urgent", "high", "medium", "low"]:
+        total_p = await db.tasks.count_documents({
+            "user_id": user_id, "priority": p, "created_at": {"$gte": cutoff},
+        })
+        done_p = await db.tasks.count_documents({
+            "user_id": user_id, "priority": p, "completed": True,
+            "completed_at": {"$gte": cutoff},
+        })
+        by_priority[p] = {"total": total_p, "done": done_p, "rate_pct": round((done_p / total_p) * 100) if total_p else 0}
+
+    # Avg tasks completed per active day (last 14d)
+    active_days = sorted(set(t["completed_at"][:10] for t in completed if "completed_at" in t and len(t["completed_at"]) >= 10))[-14:]
+    avg_per_active_day = round(len(completed) / len(active_days), 1) if active_days else 0
+
+    # Habit consistency
+    habits_total = await db.habits.count_documents({"user_id": user_id})
+    habit_checks_30d = await db.habit_checks.count_documents({
+        "user_id": user_id, "checked_at": {"$gte": cutoff},
+    })
+    consistency = round((habit_checks_30d / (habits_total * 30)) * 100) if habits_total else 0
+
+    return {
+        "best_day_of_week": best_dow,
+        "best_hour_band": best_hour_band,
+        "average_focus_session_minutes": avg_session_min,
+        "interrupt_rate_pct": interrupt_rate,
+        "average_tasks_per_active_day": avg_per_active_day,
+        "completion_by_priority": by_priority,
+        "habit_consistency_pct": consistency,
+        "habits_total": habits_total,
+        "sample_size_days": 30,
+        "completed_30d": len(completed),
+        "focus_sessions_30d": len(sessions),
+    }
+
+
+@api.get("/insights/burnout")
+async def insights_burnout(current=Depends(get_current_user)):
+    user_id = current["user_id"]
+    now = now_utc()
+    cutoff_7 = (now - timedelta(days=7)).isoformat()
+    cutoff_14 = (now - timedelta(days=14)).isoformat()
+
+    # Overload ratio last 7 days (sum estimates of tasks scheduled / capacity)
+    capacity_min_per_day = (current.get("daily_capacity", 4) or 4) * 60
+    last7_tasks = await db.tasks.find({
+        "user_id": user_id,
+        "created_at": {"$gte": cutoff_7},
+    }, {"_id": 0, "estimated_minutes": 1}).to_list(500)
+    overload_score = min(60, max(0, round(
+        (sum(int(t.get("estimated_minutes") or 30) for t in last7_tasks) - capacity_min_per_day * 7)
+        / max(1, capacity_min_per_day) * 6
+    )))
+
+    # Interrupted sessions
+    sessions_7 = await db.focus_sessions.find({
+        "user_id": user_id, "started_at": {"$gte": cutoff_7},
+    }, {"_id": 0, "interrupted": 1, "started_at": 1}).to_list(500)
+    interrupt_pct = (sum(1 for s in sessions_7 if s.get("interrupted")) / len(sessions_7) * 100) if sessions_7 else 0
+    interrupt_score = round(min(25, interrupt_pct * 0.4))
+
+    # Completion-rate drop vs prior week
+    done_7 = await db.tasks.count_documents({"user_id": user_id, "completed": True, "completed_at": {"$gte": cutoff_7}})
+    done_prev = await db.tasks.count_documents({
+        "user_id": user_id, "completed": True,
+        "completed_at": {"$gte": cutoff_14, "$lt": cutoff_7},
+    })
+    drop_score = 0
+    if done_prev > 0:
+        delta = (done_prev - done_7) / done_prev
+        if delta > 0:
+            drop_score = round(min(15, delta * 30))
+
+    # Late-night activity (>= 23:00 local approx via UTC)
+    late_night = 0
+    for s in sessions_7:
+        try:
+            h = datetime.fromisoformat(s["started_at"]).hour
+            if h >= 23 or h <= 4:
+                late_night += 1
+        except Exception:
+            pass
+    late_score = min(10, late_night * 2)
+
+    total = min(100, overload_score + interrupt_score + drop_score + late_score)
+    if total < 30:
+        level = "calm"
+        message = "Healthy rhythm. Keep going."
+    elif total < 60:
+        level = "stretched"
+        message = "You're carrying a lot. Schedule one slow morning."
+    else:
+        level = "overheating"
+        message = "Pull back. Cut three tasks. Take one whole evening off."
+
+    return {
+        "score": total,
+        "level": level,
+        "message": message,
+        "components": {
+            "overload": overload_score,
+            "interruptions": interrupt_score,
+            "completion_drop": drop_score,
+            "late_night": late_score,
+        },
+        "data": {
+            "tasks_planned_7d": len(last7_tasks),
+            "tasks_done_7d": done_7,
+            "tasks_done_prev7d": done_prev,
+            "interrupt_pct": round(interrupt_pct),
+            "late_night_sessions": late_night,
+        },
+    }
+
+
+@api.get("/insights/personality")
+async def insights_personality(current=Depends(get_current_user)):
+    user_id = current["user_id"]
+    cutoff = (now_utc() - timedelta(days=30)).isoformat()
+
+    sessions = await db.focus_sessions.find(
+        {"user_id": user_id, "started_at": {"$gte": cutoff}},
+        {"_id": 0, "completed_minutes": 1, "duration_minutes": 1},
+    ).to_list(2000)
+    total_focus = sum(int(s.get("completed_minutes") or 0) for s in sessions)
+    avg_session = (total_focus / len(sessions)) if sessions else 0
+    long_sessions = sum(1 for s in sessions if int(s.get("completed_minutes") or 0) >= 50)
+
+    completed_tasks = await db.tasks.count_documents({
+        "user_id": user_id, "completed": True, "completed_at": {"$gte": cutoff}
+    })
+    captured = await db.tasks.count_documents({
+        "user_id": user_id, "source": {"$in": ["journal", "decompose"]},
+        "created_at": {"$gte": cutoff},
+    })
+    journal_count = await db.journal.count_documents({
+        "user_id": user_id, "created_at": {"$gte": cutoff},
+    })
+    goals_count = await db.goals.count_documents({"user_id": user_id, "archived": {"$ne": True}})
+    reviews_count = await db.reviews.count_documents({"user_id": user_id, "created_at": {"$gte": cutoff}})
+
+    # Heuristic classification
+    archetype = "Architect"
+    headline = "Planner & builder. You think before you move."
+    if avg_session >= 45 and long_sessions >= 3:
+        archetype = "Marathoner"
+        headline = "Long undisturbed dives. You like to disappear into a problem."
+    elif len(sessions) >= 12 and avg_session < 35:
+        archetype = "Sprinter"
+        headline = "Short bursts. You stack many small finishes per day."
+    elif captured >= 6 or journal_count >= 4:
+        archetype = "Improviser"
+        headline = "Energy first. You capture wildly and refine later."
+    elif goals_count >= 3 and reviews_count >= 1:
+        archetype = "Architect"
+        headline = "Planner & builder. You design weeks more than days."
+
+    if completed_tasks < 5 and len(sessions) < 3:
+        archetype = "Calibrating"
+        headline = "Velari is still learning your rhythm. Keep using it."
+
+    return {
+        "archetype": archetype,
+        "headline": headline,
+        "signals": {
+            "average_session_min": round(avg_session),
+            "long_sessions_30d": long_sessions,
+            "completed_tasks_30d": completed_tasks,
+            "ai_captured_or_decomposed_30d": captured,
+            "journal_entries_30d": journal_count,
+            "active_goals": goals_count,
+            "reviews_30d": reviews_count,
+        },
+    }
+
+
+@api.get("/insights/goal-alignment")
+async def insights_goal_alignment(current=Depends(get_current_user)):
+    user_id = current["user_id"]
+    cutoff = (now_utc() - timedelta(days=14)).isoformat()
+
+    goals = await db.goals.find(
+        {"user_id": user_id, "archived": {"$ne": True}}, {"_id": 0}
+    ).to_list(50)
+    if not goals:
+        return {"goals": [], "drift": []}
+
+    total_intended_weight = sum(g.get("weight", 5) for g in goals)
+    # Actual minutes spent: sum estimated_minutes of completed tasks per goal
+    minutes_by_goal = {g["goal_id"]: 0 for g in goals}
+    unaligned_min = 0
+    completed = await db.tasks.find(
+        {"user_id": user_id, "completed": True, "completed_at": {"$gte": cutoff}},
+        {"_id": 0, "estimated_minutes": 1, "goal_id": 1, "actual_minutes": 1},
+    ).to_list(2000)
+    for t in completed:
+        mins = int(t.get("actual_minutes") or t.get("estimated_minutes") or 0)
+        gid = t.get("goal_id")
+        if gid and gid in minutes_by_goal:
+            minutes_by_goal[gid] += mins
+        else:
+            unaligned_min += mins
+
+    total_min = sum(minutes_by_goal.values()) + unaligned_min
+    result_goals = []
+    drift = []
+    for g in goals:
+        intended_pct = round((g.get("weight", 5) / total_intended_weight) * 100) if total_intended_weight else 0
+        actual_pct = round((minutes_by_goal[g["goal_id"]] / total_min) * 100) if total_min else 0
+        d = actual_pct - intended_pct
+        result_goals.append({
+            "goal_id": g["goal_id"],
+            "title": g["title"],
+            "color": g.get("color"),
+            "icon": g.get("icon"),
+            "weight": g.get("weight", 5),
+            "minutes": minutes_by_goal[g["goal_id"]],
+            "intended_pct": intended_pct,
+            "actual_pct": actual_pct,
+            "delta": d,
+        })
+        if d < -10:
+            drift.append({"goal_id": g["goal_id"], "title": g["title"], "delta": d,
+                          "note": f"Under-served by {abs(d)}%. Add one task tied to this goal."})
+
+    return {
+        "goals": result_goals,
+        "drift": drift,
+        "unaligned_minutes": unaligned_min,
+        "total_tracked_minutes": total_min,
+    }
+
+
+# ============================================================
+# NUDGES — Contextual smart suggestions
+# ============================================================
+@api.get("/nudges")
+async def get_nudges(current=Depends(get_current_user)):
+    user_id = current["user_id"]
+    today = now_utc().date().isoformat()
+    hr = now_utc().hour
+    nudges = []
+
+    # 1. No check-in yet → suggest it
+    checkin = await db.checkins.find_one({"user_id": user_id, "date": today})
+    if not checkin and hr < 14:
+        nudges.append({
+            "id": "checkin",
+            "kind": "checkin",
+            "text": "Two-tap mood check-in. Velari will adapt your day.",
+            "action": "Check in",
+        })
+
+    # 2. Today has no tasks → encourage capture
+    open_today = await db.tasks.count_documents({
+        "user_id": user_id, "completed": False,
+        "$or": [{"scheduled_for": today}, {"due_date": today}],
+    })
+    if open_today == 0 and hr < 18:
+        nudges.append({
+            "id": "capture",
+            "kind": "capture",
+            "text": "Today is open. Capture one intention.",
+            "action": "Quick capture",
+        })
+
+    # 3. End-of-day shutdown ritual
+    if hr >= 18:
+        rit = await db.rituals.find_one({"user_id": user_id, "kind": "shutdown", "date": today})
+        if not rit:
+            nudges.append({
+                "id": "shutdown",
+                "kind": "shutdown",
+                "text": "Close today gently. Three breaths, three wins.",
+                "action": "Shutdown ritual",
+            })
+
+    # 4. Streak protection — if streak >= 2 and nothing done yet
+    today_done = await db.tasks.count_documents({
+        "user_id": user_id, "completed": True,
+        "completed_at": {"$gte": today},
+    })
+    streak_data = current.get("longest_streak", 0) or 0
+    if today_done == 0 and hr >= 18 and streak_data >= 2:
+        nudges.append({
+            "id": "streak",
+            "kind": "streak",
+            "text": "Protect your streak. One small thing counts.",
+            "action": "Capture small task",
+        })
+
+    # 5. Goal drift hint
+    goals = await db.goals.count_documents({"user_id": user_id, "archived": {"$ne": True}})
+    if goals == 0:
+        nudges.append({
+            "id": "goal",
+            "kind": "goal",
+            "text": "Name your top 3 goals. Velari will guard your time.",
+            "action": "Set goals",
+        })
+
+    return nudges[:3]
+
+
+# ============================================================
 # HEALTH
 # ============================================================
 @api.get("/")
@@ -1145,6 +1836,9 @@ async def on_startup():
     await db.events.create_index("event_id", unique=True)
     await db.focus_sessions.create_index("focus_id", unique=True)
     await db.sessions.create_index("session_token", unique=True)
+    await db.goals.create_index("goal_id", unique=True)
+    await db.checkins.create_index([("user_id", 1), ("date", 1)], unique=True)
+    await db.journal.create_index("entry_id", unique=True)
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL")

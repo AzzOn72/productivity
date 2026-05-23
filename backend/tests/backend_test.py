@@ -469,3 +469,345 @@ class TestTightenedAIPrompts:
         # Should be roughly 3 lines (allow some slack)
         nonempty = [ln for ln in insight.splitlines() if ln.strip()]
         assert 1 <= len(nonempty) <= 6, f"Unexpected line count: {len(nonempty)}\n{insight}"
+
+
+# ============================================================
+# V3 — Goals CRUD
+# ============================================================
+class TestGoals:
+    """Goals CRUD with weight; verify task linking and untag on delete."""
+
+    def test_create_list_patch_delete_goal_untags_tasks(self, admin_client):
+        # Create goal
+        r = admin_client.post(f"{API}/goals", json={
+            "title": "TEST_goal_health",
+            "weight": 6,
+            "color": "#7B8B7B",
+            "why": "feel alive",
+        })
+        assert r.status_code == 200, r.text
+        goal = r.json()
+        assert "goal_id" in goal
+        assert goal["title"] == "TEST_goal_health"
+        assert goal["weight"] == 6
+        gid = goal["goal_id"]
+
+        try:
+            # Create a task tagged to the goal
+            t = admin_client.post(f"{API}/tasks", json={
+                "title": "TEST_goal_linked_task",
+                "priority": "high",
+                "goal_id": gid,
+            }).json()
+            tid = t["task_id"]
+            assert t.get("goal_id") == gid
+
+            # List goals — must include progress fields
+            lst = admin_client.get(f"{API}/goals")
+            assert lst.status_code == 200
+            goals = lst.json()
+            mine = next((g for g in goals if g["goal_id"] == gid), None)
+            assert mine is not None, "Created goal missing from list"
+            assert "progress_pct" in mine
+            assert "tasks_total_14d" in mine
+            assert "tasks_done_14d" in mine
+            assert mine["tasks_total_14d"] >= 1
+            assert mine["progress_pct"] == 0  # nothing completed
+
+            # Complete the task → progress_pct should rise
+            admin_client.patch(f"{API}/tasks/{tid}", json={"completed": True})
+            lst2 = admin_client.get(f"{API}/goals").json()
+            mine2 = next((g for g in lst2 if g["goal_id"] == gid), None)
+            assert mine2["tasks_done_14d"] >= 1
+            assert mine2["progress_pct"] >= 1, f"progress not updated: {mine2}"
+
+            # PATCH weight + title
+            pr = admin_client.patch(f"{API}/goals/{gid}", json={"weight": 3, "title": "TEST_goal_health_v2"})
+            assert pr.status_code == 200
+            assert pr.json()["weight"] == 3
+            assert pr.json()["title"] == "TEST_goal_health_v2"
+
+            # DELETE goal → task should be untagged
+            dr = admin_client.delete(f"{API}/goals/{gid}")
+            assert dr.status_code == 200
+            # Verify task no longer has goal_id
+            tasks = admin_client.get(f"{API}/tasks").json()
+            t_after = next((x for x in tasks if x["task_id"] == tid), None)
+            assert t_after is not None
+            assert not t_after.get("goal_id"), f"Task still tagged after delete: {t_after}"
+        finally:
+            # cleanup task
+            try:
+                admin_client.delete(f"{API}/tasks/{tid}")
+            except Exception:
+                pass
+
+
+# ============================================================
+# V3 — Mood / Energy Check-in
+# ============================================================
+class TestCheckin:
+    def test_checkin_upsert_today_and_history(self, admin_client):
+        # POST
+        r = admin_client.post(f"{API}/checkin", json={"mood": 4, "energy": 3, "note": "TEST_checkin"})
+        assert r.status_code == 200, r.text
+        doc = r.json()
+        assert doc["mood"] == 4
+        assert doc["energy"] == 3
+
+        # GET today
+        today = admin_client.get(f"{API}/checkin/today")
+        assert today.status_code == 200
+        td = today.json()
+        assert td.get("present") is not False
+        assert td["mood"] == 4
+
+        # Upsert idempotent — second POST same day overwrites
+        r2 = admin_client.post(f"{API}/checkin", json={"mood": 5, "energy": 5})
+        assert r2.status_code == 200
+        today2 = admin_client.get(f"{API}/checkin/today").json()
+        assert today2["mood"] == 5
+        assert today2["energy"] == 5
+
+        # History
+        hist = admin_client.get(f"{API}/checkin/history")
+        assert hist.status_code == 200
+        arr = hist.json()
+        assert isinstance(arr, list)
+        assert len(arr) >= 1
+        assert len(arr) <= 30
+
+
+# ============================================================
+# V3 — Journal (with AI task extraction)
+# ============================================================
+class TestJournal:
+    def test_create_with_extraction_then_delete(self, admin_client):
+        text = "I need to email Anya about the Q1 deck and finish the onboarding slide by Friday."
+        r = admin_client.post(f"{API}/journal", json={"text": text, "extract_tasks": True}, timeout=120)
+        assert r.status_code == 200, r.text
+        entry = r.json()
+        assert "entry_id" in entry
+        eid = entry["entry_id"]
+        extracted = entry.get("extracted_task_ids") or []
+        assert isinstance(extracted, list)
+        # actionable text -> expect 1-3 extracted tasks (allow 0 if LLM hiccups)
+        # but we strongly assert at least 1 since prompt is highly actionable
+        assert len(extracted) >= 1, f"Expected actionable text to extract >=1 task, got {extracted}"
+
+        try:
+            # Verify tasks exist with source='journal'
+            tasks = admin_client.get(f"{API}/tasks").json()
+            j_tasks = [t for t in tasks if t["task_id"] in extracted]
+            assert len(j_tasks) >= 1
+            for t in j_tasks:
+                assert t.get("source") == "journal"
+
+            # GET /journal lists
+            lst = admin_client.get(f"{API}/journal").json()
+            assert any(e["entry_id"] == eid for e in lst)
+        finally:
+            # cleanup extracted tasks
+            for tid in extracted:
+                try:
+                    admin_client.delete(f"{API}/tasks/{tid}")
+                except Exception:
+                    pass
+            # DELETE journal entry
+            dr = admin_client.delete(f"{API}/journal/{eid}")
+            assert dr.status_code == 200
+
+
+# ============================================================
+# V3 — AI "What now?"
+# ============================================================
+class TestAiNow:
+    def test_now_returns_nonempty_action(self, admin_client):
+        r = admin_client.post(f"{API}/ai/now", json={"free_minutes": 30, "location": "home"}, timeout=120)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # Required keys
+        for key in ("action", "rationale", "minutes"):
+            assert key in data, f"missing key {key} in {data}"
+        assert isinstance(data["action"], str)
+        assert len(data["action"].strip()) > 0, "action must be non-empty"
+        assert isinstance(data["minutes"], int)
+
+
+# ============================================================
+# V3 — AI Decompose
+# ============================================================
+class TestAiDecompose:
+    def test_decompose_creates_subtasks(self, admin_client):
+        # Create parent task
+        parent = admin_client.post(f"{API}/tasks", json={
+            "title": "TEST_decompose_parent_launch_landing_page",
+            "estimated_minutes": 90,
+            "priority": "high",
+            "notes": "Build the v3 marketing landing page with hero, features, pricing, FAQ.",
+        }).json()
+        pid = parent["task_id"]
+        try:
+            r = admin_client.post(f"{API}/ai/decompose", json={"task_id": pid}, timeout=120)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert "subtasks" in data
+            subs = data["subtasks"]
+            assert 3 <= len(subs) <= 5, f"Expected 3-5 subtasks, got {len(subs)}"
+            # Verify each child links to parent
+            for s in subs:
+                assert s.get("parent_task_id") == pid
+                assert s.get("source") == "decompose"
+                assert s.get("title")
+                assert isinstance(s.get("estimated_minutes"), int)
+            # Total minutes roughly equals parent (allow 50% slack)
+            total = sum(s["estimated_minutes"] for s in subs)
+            assert 30 <= total <= 200, f"Subtask total {total} far from parent 90"
+
+            # Verify children visible in /api/tasks
+            all_tasks = admin_client.get(f"{API}/tasks").json()
+            children = [t for t in all_tasks if t.get("parent_task_id") == pid]
+            assert len(children) == len(subs)
+        finally:
+            # cleanup parent + children
+            try:
+                tasks = admin_client.get(f"{API}/tasks").json()
+                for t in tasks:
+                    if t["task_id"] == pid or t.get("parent_task_id") == pid:
+                        admin_client.delete(f"{API}/tasks/{t['task_id']}")
+            except Exception:
+                pass
+
+
+# ============================================================
+# V3 — Insights
+# ============================================================
+class TestInsights:
+    def test_patterns_shape(self, admin_client):
+        r = admin_client.get(f"{API}/insights/patterns")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # All required keys
+        for key in (
+            "best_day_of_week",
+            "best_hour_band",
+            "average_focus_session_minutes",
+            "interrupt_rate_pct",
+            "average_tasks_per_active_day",
+            "completion_by_priority",
+            "habit_consistency_pct",
+            "sample_size_days",
+            "completed_30d",
+            "focus_sessions_30d",
+        ):
+            assert key in data, f"missing {key}: {data}"
+        assert data["sample_size_days"] == 30
+        cbp = data["completion_by_priority"]
+        for bucket in ("urgent", "high", "medium", "low"):
+            assert bucket in cbp
+
+    def test_burnout_shape(self, admin_client):
+        r = admin_client.get(f"{API}/insights/burnout")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "score" in data and isinstance(data["score"], int)
+        assert 0 <= data["score"] <= 100
+        assert data["level"] in ("calm", "stretched", "overheating")
+        assert "message" in data and data["message"]
+        comps = data["components"]
+        for k in ("overload", "interruptions", "completion_drop", "late_night"):
+            assert k in comps
+        assert "data" in data
+
+    def test_personality_shape(self, admin_client):
+        r = admin_client.get(f"{API}/insights/personality")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["archetype"] in ("Calibrating", "Sprinter", "Marathoner", "Architect", "Improviser")
+        assert data["headline"]
+        assert "signals" in data
+
+    def test_goal_alignment_with_and_without_goals(self, admin_client, new_user):
+        # New user (0 goals) → empty arrays
+        r0 = new_user["client"].get(f"{API}/insights/goal-alignment")
+        assert r0.status_code == 200
+        d0 = r0.json()
+        assert d0["goals"] == []
+        assert d0["drift"] == []
+
+        # Admin: create a fresh goal + linked task, completed → must appear
+        g = admin_client.post(f"{API}/goals", json={"title": "TEST_align_goal", "weight": 5, "color": "#C86B52"}).json()
+        gid = g["goal_id"]
+        t = admin_client.post(f"{API}/tasks", json={
+            "title": "TEST_align_task", "goal_id": gid, "estimated_minutes": 30,
+        }).json()
+        tid = t["task_id"]
+        try:
+            r = admin_client.get(f"{API}/insights/goal-alignment")
+            assert r.status_code == 200
+            data = r.json()
+            assert isinstance(data["goals"], list)
+            mine = next((x for x in data["goals"] if x.get("goal_id") == gid), None)
+            assert mine is not None
+            assert "intended_pct" in mine
+            assert "actual_pct" in mine
+            assert "delta" in mine
+            assert "drift" in data
+            assert "unaligned_minutes" in data
+            assert "total_tracked_minutes" in data
+        finally:
+            admin_client.delete(f"{API}/tasks/{tid}")
+            admin_client.delete(f"{API}/goals/{gid}")
+
+
+# ============================================================
+# V3 — Nudges
+# ============================================================
+class TestNudges:
+    def test_nudges_admin(self, admin_client):
+        r = admin_client.get(f"{API}/nudges")
+        assert r.status_code == 200, r.text
+        nudges = r.json()
+        assert isinstance(nudges, list)
+        assert len(nudges) <= 3
+        valid_kinds = {"checkin", "capture", "shutdown", "streak", "goal"}
+        for n in nudges:
+            assert n["kind"] in valid_kinds
+            assert n["text"]
+            assert n["action"]
+            assert "id" in n
+
+    def test_fresh_user_sees_goal_nudge(self, new_user):
+        # Fresh user: no goals → must see nudge-goal
+        r = new_user["client"].get(f"{API}/nudges")
+        assert r.status_code == 200, r.text
+        kinds = [n["kind"] for n in r.json()]
+        assert "goal" in kinds, f"Fresh user should see goal nudge, got: {kinds}"
+
+
+# ============================================================
+# V3 — Task model accepts goal_id + parent_task_id
+# ============================================================
+class TestTaskModelV3Fields:
+    def test_task_accepts_goal_and_parent_fields(self, admin_client):
+        # Create a goal
+        g = admin_client.post(f"{API}/goals", json={"title": "TEST_v3field_goal", "weight": 5, "color": "#000000"}).json()
+        gid = g["goal_id"]
+        parent = admin_client.post(f"{API}/tasks", json={"title": "TEST_v3_parent", "goal_id": gid}).json()
+        pid = parent["task_id"]
+        child = admin_client.post(f"{API}/tasks", json={
+            "title": "TEST_v3_child", "parent_task_id": pid, "goal_id": gid,
+        }).json()
+        cid = child["task_id"]
+        try:
+            assert parent.get("goal_id") == gid
+            assert child.get("parent_task_id") == pid
+            assert child.get("goal_id") == gid
+
+            # PATCH child to untag goal
+            pr = admin_client.patch(f"{API}/tasks/{cid}", json={"goal_id": None})
+            assert pr.status_code == 200
+        finally:
+            admin_client.delete(f"{API}/tasks/{cid}")
+            admin_client.delete(f"{API}/tasks/{pid}")
+            admin_client.delete(f"{API}/goals/{gid}")
