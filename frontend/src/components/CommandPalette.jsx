@@ -30,7 +30,7 @@ const ACTIONS = [
   { id: "journal", section: "Navigate", label: "Journal", icon: BookOpen, path: "/journal" },
 
   { id: "now", section: "Magic", label: 'Ask "What should I do right now?"', icon: Sparkles, kind: "now" },
-  { id: "auto", section: "Magic", label: "Auto-plan my day", icon: Wand2, kind: "autoplan" },
+  { id: "autoplan", section: "Magic", label: "Auto-plan my day", icon: Wand2, kind: "autoplan" },
   { id: "capture", section: "Magic", label: "Quick capture (AI parsed)", icon: Plus, kind: "capture" },
   { id: "checkin", section: "Magic", label: "Mood & energy check-in", icon: Heart, kind: "checkin" },
   { id: "shutdown", section: "Magic", label: "Evening shutdown ritual", icon: Moon, kind: "shutdown" },

@@ -43,6 +43,21 @@ A category-defining, browser-first daily operating system that competes with and
 - **Visual polish**: `card-soft` + `shadow-elevated` utilities, more breathing room, softer borders.
 - Tests: **30/30 backend + 100% frontend critical flows** (iteration_2.json).
 
+### v3.0 — 2026-02-23 (Life OS expansion — feature depth)
+- **AI "What now?"** (`POST /api/ai/now`): the magical single-best-action prompt. Lives as a hero card on Today + reachable from the palette. Adapts to free-time selector (15/30/60/120).
+- **AI auto task decomposition** (`POST /api/ai/decompose`): breaks a parent task into 3-5 child sub-steps (`parent_task_id` field). One-click "split" icon on Tasks.
+- **Command Palette (⌘K / Ctrl+K)**: global, fuzzy filters, runs navigation + magic actions (Now / Auto-plan / Check-in / Shutdown / Capture). Falls through to quick-capture on free-text + Enter when no matches.
+- **Insights** (`/insights`, Elite-flavored retention driver):
+  - Life **patterns** (`/api/insights/patterns`): best day-of-week, best hour band, avg focus session, interrupt rate, completion by priority bars, habit consistency.
+  - **Burnout signal** (`/api/insights/burnout`): 0–100 score with calm / stretched / overheating level.
+  - **Productivity personality** (`/api/insights/personality`): Calibrating / Sprinter / Marathoner / Architect / Improviser archetypes.
+  - **Goal alignment** (`/api/insights/goal-alignment`): solid bar = actual time share, dashed mark = intended weight; emits drift list when delta < -10%.
+- **Goals** (`/goals`, CRUD `/api/goals`): weighted goals (1–10), color, why, target date. Tasks accept `goal_id`; deleting a goal untags affected tasks.
+- **Mood / Energy check-in** (`/api/checkin`): two-tap daily 1–5 scale; the "What now?" prompt adapts to it.
+- **Journal** (`/journal`, `/api/journal`): frictionless capture with AI task extraction; extracted tasks get `source='journal'`.
+- **Smart Nudges** (`/api/nudges`): up to 3 contextual prompts based on user state.
+- Tests: **42/42 backend + 100% frontend critical flows** (iteration_3.json).
+
 ## Backlog
 ### P1 — Next iteration
 - Wire real **Stripe Checkout** (Pro $5 / Elite $15) — replace dev override; env-gate the dev path.
