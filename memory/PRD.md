@@ -16,45 +16,47 @@ A category-defining, browser-first daily operating system that competes with and
 - Strong SaaS monetization (Free / Pro $5 / Elite $15).
 - High retention via streaks, momentum, morning ritual, weekly review.
 
-## Implemented (v1.0 — 2026-02-23)
+## Implemented
+
+### v1.0 — 2026-02-23 (MVP)
 - **Backend** (FastAPI + Mongo, `/api` prefix, JWT cookies + Bearer):
-  - Email/password auth + Emergent Google session OAuth (unified User model).
-  - Onboarding endpoint (goals, work style, chronotype, capacity, tone).
-  - Tasks CRUD + AI quick-capture (natural language → structured task).
-  - Habits with daily check-ins and streak calculation.
-  - Calendar events (event / focus / break).
-  - Focus sessions (start/complete + today total).
-  - Weekly reviews + 7-day summary aggregate.
-  - AI suite (Claude Sonnet 4.5 via Emergent LLM key): /chat, /prioritize, /plan-day, /weekly-insight.
-  - Admin seeded on startup. Indexes on key fields.
-- **Frontend** (React 19 + Tailwind + Shadcn primitives, Cabinet Grotesk + Manrope + Fraunces italic):
-  - Marketing **Landing** — bento hero, philosophy strip, feature bento, focus mode preview, vs. Sunsama comparison, testimonials, final CTA.
-  - **Pricing** — three tiers, "luxury" Elite card, full comparison, FAQ.
-  - **Login** / **Signup** — split-screen premium, Google + email/password.
-  - **Onboarding** — 4 calm steps with intent words.
-  - **Today dashboard** — greeting + N×4 stat strip + 3-column emotional center (habits/quick capture, AI-prioritized priorities, schedule + focus card).
-  - **Tasks** — list with priority pills, filters, search, quick add.
-  - **Calendar** — week grid with hourly slots, click-to-create modal.
-  - **Focus** — cinematic fullscreen, intent capture, preset durations (25/50/90), ring countdown, breathe animation.
-  - **Weekly Review** — 4-step stepper with AI reflection step.
-  - **Settings** + global **AI Coach** drawer.
-- Test pass: 19/19 backend (pytest), 10/10 frontend smoke.
+  - Email/password auth + Emergent Google session OAuth.
+  - Onboarding, Tasks CRUD + AI quick-capture, Habits with streaks, Calendar events, Focus sessions, Weekly reviews + 7-day summary.
+  - AI: chat, prioritize, plan-day, weekly-insight (Claude Sonnet 4.5 via Emergent LLM key).
+- **Frontend**: Landing, Login/Signup (Google + email/pw), 4-step Onboarding, Today, Tasks, Calendar, Focus, Weekly Review, Pricing, Settings, AI Coach drawer.
+- Tests: 19/19 backend + 10/10 frontend.
+
+### v2.0 — 2026-02-23 (Premium upgrade)
+- **New backend endpoints**:
+  - `/streak` — non-toxic streak with longest record.
+  - `/momentum` — 0–100 daily momentum (tasks 45% + focus 40% + habits 15%) with calm label (Quiet / Warming / In motion / Flow).
+  - `/ai/overload-check` — warns when planned estimate exceeds capacity.
+  - `/ai/auto-plan` — creates focus event blocks across the day based on chronotype, with 15-min breaks, no duplicates.
+  - `/insights/weekly-compare` — this-week vs previous-week deltas, best day, distraction rate.
+  - `/rituals/shutdown` — saves evening shutdown reflections.
+  - `/billing/upgrade`, `/billing/create-checkout`, `/billing/plan` — Stripe-ready scaffolding with **DEV PREMIUM OVERRIDE** (`dev_mode=true` grants plan instantly, NOT production).
+  - Tightened AI prompts → terse, bulleted, ≤14-word reasoning, no preamble.
+- **Today redesign**: hero with **Clarity ring**, **Momentum bar**, **Auto-plan my day** button, AI reorder, **Overload banner**, **Top-three iconic cards**, energy-window schedule, sidebar streak + Unlock Pro nudge, morning ritual modal, shutdown ritual modal.
+- **Focus 2.0**: ambient **aurora** gradient (sage + terracotta), three intensity tiers (Spark / Deep / Flow), **flow score** with interrupt tracking, larger 7xl countdown, mute toggle, premium shadow.
+- **Weekly Review 2.0**: **CoachStat** tiles with up/down delta percentages, **Best day** detection, **Distraction pattern** banner — feels like coaching, not analytics.
+- **Pricing**: dev-mode preview badge + instant grant of Pro/Elite for testing UX flows; "Current plan" indicator; explicit `IS_DEV_MODE` flag in `/app/frontend/src/lib/devMode.js` (must be FALSE for production).
+- **Visual polish**: `card-soft` + `shadow-elevated` utilities, more breathing room, softer borders.
+- Tests: **30/30 backend + 100% frontend critical flows** (iteration_2.json).
 
 ## Backlog
 ### P1 — Next iteration
-- Stripe checkout wired to Pro / Elite (currently UI-only).
-- Drag-to-reschedule on Calendar; render tasks beside events.
-- Habit detail screen with weekly heatmap.
-- AI weekly insight: deeper charts (Recharts), trends across reviews.
-- Goals & quarter planning module (Elite).
-- Mobile gesture polish + native share to "Quick capture".
+- Wire real **Stripe Checkout** (Pro $5 / Elite $15) — replace dev override; env-gate the dev path.
+- Habit detail screen with weekly heatmap; Recharts trend lines in Weekly Insight.
+- Calendar: drag-to-reschedule + render tasks beside events.
+- Goals & quarter planning module (Elite tier).
+- Mobile gesture polish + share-to-Quick-capture.
 
 ### P2
 - Premium themes (Elite): Obsidian, Ivory, Sage, Editorial.
-- Calendar sync (Google / iCal subscription).
-- Reminder cron + email digest (Resend).
-- Live focus music integration.
-- Public profile / quiet share page for habits or weekly wins.
+- Calendar sync (Google / iCal subscription) + reminders via Resend.
+- Ambient focus soundscapes; live focus music integration.
+- Public quiet share page (habits / weekly wins).
+- Split server.py into routers; aggregation pipeline for /streak.
 
 ### P3
 - Native mobile app (React Native).
@@ -66,3 +68,4 @@ A category-defining, browser-first daily operating system that competes with and
 - AI uses `anthropic/claude-sonnet-4-5-20250929` through `emergentintegrations`.
 - All routes prefixed `/api`. Cookies: httpOnly, secure, sameSite=None.
 - JWT also returned in JSON for resilient Bearer header on cross-origin.
+- **DEV MODE**: `IS_DEV_MODE=true` in `/app/frontend/src/lib/devMode.js` and `dev_mode=true` in `POST /api/billing/upgrade` grant Pro/Elite instantly. Flip to FALSE before any production deploy.
