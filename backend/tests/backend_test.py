@@ -811,3 +811,148 @@ class TestTaskModelV3Fields:
             admin_client.delete(f"{API}/tasks/{cid}")
             admin_client.delete(f"{API}/tasks/{pid}")
             admin_client.delete(f"{API}/goals/{gid}")
+
+
+# ------------------------------------------------------------
+# v4 — Universal Search
+# ------------------------------------------------------------
+class TestUniversalSearch:
+    def test_search_requires_auth(self):
+        r = requests.get(f"{API}/search?q=foo", timeout=15)
+        assert r.status_code == 401
+
+    def test_search_short_query_returns_empty(self, admin_client):
+        r = admin_client.get(f"{API}/search?q=f")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["tasks"] == [] and body["goals"] == [] and body["journal"] == [] and body["events"] == []
+        assert "query" in body
+
+    def test_search_empty_query_returns_empty(self, admin_client):
+        r = admin_client.get(f"{API}/search?q=")
+        assert r.status_code == 200
+        body = r.json()
+        for k in ("tasks", "goals", "journal", "events"):
+            assert body[k] == []
+
+    def test_search_finds_task(self, admin_client):
+        # Seed a unique task
+        token = f"TEST_search_{uuid.uuid4().hex[:6]}"
+        cr = admin_client.post(f"{API}/tasks", json={"title": f"Focus deep on {token}"})
+        assert cr.status_code == 200
+        tid = cr.json()["task_id"]
+        try:
+            r = admin_client.get(f"{API}/search?q={token}")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["query"] == token
+            assert isinstance(body["tasks"], list)
+            assert any(t.get("task_id") == tid for t in body["tasks"]), body
+            # Up to 8 items
+            assert len(body["tasks"]) <= 8
+            assert len(body["goals"]) <= 6
+            assert len(body["journal"]) <= 5
+            assert len(body["events"]) <= 5
+        finally:
+            admin_client.delete(f"{API}/tasks/{tid}")
+
+    def test_search_journal_truncated(self, admin_client):
+        token = f"TEST_jrnl_{uuid.uuid4().hex[:6]}"
+        long_body = token + " " + ("x" * 300)
+        # Use journal endpoint
+        jr = admin_client.post(f"{API}/journal", json={"text": long_body})
+        assert jr.status_code == 200
+        entry_id = jr.json().get("entry_id") or jr.json().get("id")
+        try:
+            r = admin_client.get(f"{API}/search?q={token}")
+            assert r.status_code == 200
+            results = r.json()["journal"]
+            assert results, "Expected the journal entry to be found"
+            for j in results:
+                if token in j.get("text", ""):
+                    # Should be truncated to <=140 chars + ellipsis
+                    assert len(j["text"]) <= 141  # 140 + …
+                    if len(j["text"]) > 140:
+                        assert j["text"].endswith("…")
+                    break
+        finally:
+            if entry_id:
+                # journal delete endpoint may or may not exist; ignore failure
+                try:
+                    admin_client.delete(f"{API}/journal/{entry_id}")
+                except Exception:
+                    pass
+
+
+# ------------------------------------------------------------
+# v4 — Events filter parenthesization (no crash)
+# ------------------------------------------------------------
+class TestEventsFilter:
+    def test_events_with_start_end_no_crash(self, admin_client):
+        r = admin_client.get(f"{API}/events?start=2026-01-01&end=2026-12-31")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_events_without_filter(self, admin_client):
+        r = admin_client.get(f"{API}/events")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+
+# ------------------------------------------------------------
+# v4 — Goals progress capped at 100
+# ------------------------------------------------------------
+class TestGoalsProgressCap:
+    def test_progress_pct_capped(self, admin_client):
+        r = admin_client.get(f"{API}/goals")
+        assert r.status_code == 200
+        goals = r.json()
+        for g in goals:
+            assert 0 <= g["progress_pct"] <= 100, g
+
+
+# ------------------------------------------------------------
+# v4 — /ai/auto-plan always returns message
+# ------------------------------------------------------------
+class TestAutoPlanMessage:
+    def test_autoplan_returns_message(self, admin_client):
+        r = admin_client.post(f"{API}/ai/auto-plan")
+        assert r.status_code == 200
+        body = r.json()
+        assert "message" in body
+        assert isinstance(body["message"], str)
+        assert len(body["message"]) > 0
+        assert "created" in body
+        # Optional fields exist whenever there were tasks; in 0-tasks branch only created+message
+        if body["created"] > 0:
+            assert "scheduled_minutes" in body
+            assert "starts_at" in body
+
+
+# ------------------------------------------------------------
+# v4 — /billing/upgrade env gate (ENABLE_DEV_BILLING)
+# ------------------------------------------------------------
+class TestBillingDevGate:
+    def test_dev_upgrade_succeeds_with_flag_true(self, admin_client):
+        # Currently env says true
+        r = admin_client.post(f"{API}/billing/upgrade", json={"plan": "elite", "dev_mode": True})
+        assert r.status_code == 200, r.text
+        # Restore admin to elite (already elite, but just in case)
+        admin_client.post(f"{API}/billing/upgrade", json={"plan": "elite", "dev_mode": True})
+
+
+# ------------------------------------------------------------
+# v4 — CORS sanity (allow_origins reflects env)
+# ------------------------------------------------------------
+class TestCORS:
+    def test_options_does_not_crash(self):
+        r = requests.options(
+            f"{API}/",
+            headers={
+                "Origin": "https://velari-elite.preview.emergentagent.com",
+                "Access-Control-Request-Method": "GET",
+            },
+            timeout=15,
+        )
+        # CORSMiddleware should respond — either 200 or 400 acceptable, but not 5xx
+        assert r.status_code < 500

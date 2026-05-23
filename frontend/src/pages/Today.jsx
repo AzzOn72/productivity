@@ -28,6 +28,7 @@ import ShutdownRitual from "@/components/ShutdownRitual";
 import NowCard from "@/components/NowCard";
 import NudgesStrip from "@/components/NudgesStrip";
 import MoodCheckIn from "@/components/MoodCheckIn";
+import { Skeleton, SkeletonText } from "@/components/Skeleton";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const longDate = () =>
@@ -72,6 +73,7 @@ export default function Today() {
   const [showShutdown, setShowShutdown] = useState(false);
   const [showCheckin, setShowCheckin] = useState(false);
   const [params, setParams] = useSearchParams();
+  const [loaded, setLoaded] = useState(false);
 
   const date = todayISO();
   const capacity = (user?.daily_capacity || 4) * 60;
@@ -96,6 +98,8 @@ export default function Today() {
       setEvents(ev.data.filter((e) => new Date(e.start).toDateString() === new Date().toDateString()));
     } catch (e) {
       toast.error(formatApiError(e));
+    } finally {
+      setLoaded(true);
     }
   }, [date]);
 
@@ -316,6 +320,25 @@ export default function Today() {
       {/* Hero: Control Center */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-6 fade-up">
         <div className="lg:col-span-8 card-soft elevated p-6 sm:p-7">
+          {!loaded ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="flex items-center gap-5">
+                <Skeleton className="h-28 w-28 rounded-full" />
+                <div className="flex-1 space-y-2.5">
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-6 w-40" />
+                  <Skeleton className="h-3 w-32" />
+                </div>
+              </div>
+              <div className="space-y-4">
+                <SkeletonText lines={2} />
+                <div className="flex gap-2">
+                  <Skeleton className="h-9 w-40 rounded-full" />
+                  <Skeleton className="h-9 w-28 rounded-full" />
+                </div>
+              </div>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <ClarityScore
               done={done.length}
@@ -346,6 +369,7 @@ export default function Today() {
               </div>
             </div>
           </div>
+          )}
 
           {overload && overload.overloaded && (
             <div className="mt-5">

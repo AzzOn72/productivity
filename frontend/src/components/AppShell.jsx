@@ -89,15 +89,24 @@ export default function AppShell({ children }) {
               to={to}
               data-testid={testid}
               className={({ isActive }) =>
-                `group flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[14.5px] transition-all ease-velari ${
+                `group relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[14.5px] transition-all duration-300 ease-velari ${
                   isActive
                     ? "bg-velari-surface text-velari-text shadow-[0_1px_0_0_hsl(var(--velari-border))]"
                     : "text-velari-textSoft hover:text-velari-text hover:bg-velari-surface/60"
                 }`
               }
             >
-              <Icon size={17} className="opacity-80" />
-              <span className="font-display tracking-tight">{label}</span>
+              {({ isActive }) => (
+                <>
+                  <span
+                    className={`absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-velari-brand transition-all duration-300 ease-velari ${
+                      isActive ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+                  <Icon size={17} className="opacity-80" />
+                  <span className="font-display tracking-tight">{label}</span>
+                </>
+              )}
             </NavLink>
           ))}
 

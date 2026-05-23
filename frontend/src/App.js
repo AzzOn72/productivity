@@ -1,8 +1,9 @@
-import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Toaster } from "sonner";
 import AppShell from "@/components/AppShell";
+import PageTransition from "@/components/PageTransition";
 
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
@@ -19,6 +20,7 @@ import Settings from "@/pages/Settings";
 import Insights from "@/pages/Insights";
 import Goals from "@/pages/Goals";
 import Journal from "@/pages/Journal";
+import NotFound from "@/pages/NotFound";
 
 import "@/App.css";
 
@@ -41,17 +43,17 @@ function AppRouter() {
         </ProtectedRoute>
       } />
 
-      <Route path="/today" element={<ProtectedRoute><AppShell><Today /></AppShell></ProtectedRoute>} />
-      <Route path="/tasks" element={<ProtectedRoute><AppShell><Tasks /></AppShell></ProtectedRoute>} />
-      <Route path="/calendar" element={<ProtectedRoute><AppShell><CalendarPage /></AppShell></ProtectedRoute>} />
+      <Route path="/today" element={<ProtectedRoute><AppShell><PageTransition><Today /></PageTransition></AppShell></ProtectedRoute>} />
+      <Route path="/tasks" element={<ProtectedRoute><AppShell><PageTransition><Tasks /></PageTransition></AppShell></ProtectedRoute>} />
+      <Route path="/calendar" element={<ProtectedRoute><AppShell><PageTransition><CalendarPage /></PageTransition></AppShell></ProtectedRoute>} />
       <Route path="/focus" element={<ProtectedRoute><Focus /></ProtectedRoute>} />
-      <Route path="/review" element={<ProtectedRoute><AppShell><WeeklyReview /></AppShell></ProtectedRoute>} />
-      <Route path="/insights" element={<ProtectedRoute><AppShell><Insights /></AppShell></ProtectedRoute>} />
-      <Route path="/goals" element={<ProtectedRoute><AppShell><Goals /></AppShell></ProtectedRoute>} />
-      <Route path="/journal" element={<ProtectedRoute><AppShell><Journal /></AppShell></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><AppShell><Settings /></AppShell></ProtectedRoute>} />
+      <Route path="/review" element={<ProtectedRoute><AppShell><PageTransition><WeeklyReview /></PageTransition></AppShell></ProtectedRoute>} />
+      <Route path="/insights" element={<ProtectedRoute><AppShell><PageTransition><Insights /></PageTransition></AppShell></ProtectedRoute>} />
+      <Route path="/goals" element={<ProtectedRoute><AppShell><PageTransition><Goals /></PageTransition></AppShell></ProtectedRoute>} />
+      <Route path="/journal" element={<ProtectedRoute><AppShell><PageTransition><Journal /></PageTransition></AppShell></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><AppShell><PageTransition><Settings /></PageTransition></AppShell></ProtectedRoute>} />
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }

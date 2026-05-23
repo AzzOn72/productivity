@@ -17,6 +17,9 @@ import {
   Moon,
   Heart,
   ArrowRight,
+  Hash,
+  FileText,
+  CalendarClock,
 } from "lucide-react";
 
 const ACTIONS = [
@@ -39,6 +42,7 @@ const ACTIONS = [
 export default function CommandPalette({ open, onClose, onCheckin, onShutdown, onCapture, onNow }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
   const nav = useNavigate();
 
   useEffect(() => {
@@ -50,32 +54,53 @@ export default function CommandPalette({ open, onClose, onCheckin, onShutdown, o
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const list = useMemo(() => {
+  // Reset state on close
+  useEffect(() => {
+    if (!open) {
+      setQ("");
+      setResults(null);
+    }
+  }, [open]);
+
+  // Live universal search (debounced)
+  useEffect(() => {
+    if (!open) return;
+    const needle = q.trim();
+    if (needle.length < 2) {
+      setResults(null);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      try {
+        const { data } = await api.get(`/search?q=${encodeURIComponent(needle)}`);
+        setResults(data);
+      } catch {}
+    }, 180);
+    return () => clearTimeout(handle);
+  }, [q, open]);
+
+  const filteredActions = useMemo(() => {
     if (!q.trim()) return ACTIONS;
     const needle = q.toLowerCase();
     return ACTIONS.filter((a) => a.label.toLowerCase().includes(needle));
   }, [q]);
 
-  const grouped = useMemo(() => {
+  const groupedActions = useMemo(() => {
     const m = new Map();
-    list.forEach((a) => {
+    filteredActions.forEach((a) => {
       if (!m.has(a.section)) m.set(a.section, []);
       m.get(a.section).push(a);
     });
     return [...m.entries()];
-  }, [list]);
+  }, [filteredActions]);
 
-  const run = async (a) => {
-    if (a.path) {
-      nav(a.path);
-      onClose?.();
-      return;
-    }
+  const runAction = async (a) => {
+    if (a.path) { nav(a.path); onClose?.(); return; }
     if (a.kind === "autoplan") {
       setBusy(true);
       try {
         const { data } = await api.post("/ai/auto-plan");
-        toast.success(`${data.created} focus block${data.created === 1 ? "" : "s"} arranged.`);
+        toast.success(data.message || `${data.created} block${data.created === 1 ? "" : "s"} arranged.`);
         nav("/today");
       } catch (e) { toast.error(formatApiError(e)); }
       finally { setBusy(false); onClose?.(); }
@@ -87,7 +112,6 @@ export default function CommandPalette({ open, onClose, onCheckin, onShutdown, o
     if (a.kind === "shutdown") { onShutdown?.(); onClose?.(); return; }
   };
 
-  // Quick-capture from the prompt if it ends with Enter and looks like a task
   const submitFreeText = async () => {
     const text = q.trim();
     if (!text) return;
@@ -101,7 +125,11 @@ export default function CommandPalette({ open, onClose, onCheckin, onShutdown, o
     finally { setBusy(false); }
   };
 
+  const hasResults =
+    results && ((results.tasks?.length || 0) + (results.goals?.length || 0) + (results.journal?.length || 0) + (results.events?.length || 0)) > 0;
+
   if (!open) return null;
+
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] px-4" data-testid="command-palette">
       <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={onClose} />
@@ -113,18 +141,83 @@ export default function CommandPalette({ open, onClose, onCheckin, onShutdown, o
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && list.length === 0) submitFreeText();
-              else if (e.key === "Enter" && list[0]) run(list[0]);
+              if (e.key === "Enter") {
+                if (filteredActions[0]) runAction(filteredActions[0]);
+                else if (!hasResults) submitFreeText();
+              }
             }}
-            placeholder="Type a command, capture a task…"
+            placeholder="Search, jump, or capture…"
             data-testid="palette-input"
             className="flex-1 bg-transparent text-[15px] outline-none placeholder:text-velari-textSoft"
           />
           <span className="text-[10.5px] tracking-[0.18em] uppercase text-velari-textSoft hidden sm:block">Esc</span>
         </div>
 
-        <div className="max-h-[55vh] overflow-y-auto py-2">
-          {list.length === 0 ? (
+        <div className="max-h-[55vh] overflow-y-auto py-2" data-testid="palette-list">
+          {/* Search results from /api/search */}
+          {hasResults && (
+            <>
+              {results.tasks.length > 0 && (
+                <Group label="Tasks">
+                  {results.tasks.map((t) => (
+                    <ResultRow
+                      key={t.task_id}
+                      icon={CheckCircle2}
+                      testid={`palette-result-task-${t.task_id}`}
+                      label={t.title}
+                      hint={t.completed ? "done" : t.scheduled_for || "open"}
+                      onClick={() => { nav("/tasks"); onClose?.(); }}
+                    />
+                  ))}
+                </Group>
+              )}
+              {results.goals.length > 0 && (
+                <Group label="Goals">
+                  {results.goals.map((g) => (
+                    <ResultRow
+                      key={g.goal_id}
+                      icon={Compass}
+                      testid={`palette-result-goal-${g.goal_id}`}
+                      label={g.title}
+                      hint={g.why}
+                      onClick={() => { nav("/goals"); onClose?.(); }}
+                    />
+                  ))}
+                </Group>
+              )}
+              {results.journal.length > 0 && (
+                <Group label="Journal">
+                  {results.journal.map((j) => (
+                    <ResultRow
+                      key={j.entry_id}
+                      icon={FileText}
+                      testid={`palette-result-journal-${j.entry_id}`}
+                      label={(j.text || "").slice(0, 60)}
+                      hint={new Date(j.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      onClick={() => { nav("/journal"); onClose?.(); }}
+                    />
+                  ))}
+                </Group>
+              )}
+              {results.events.length > 0 && (
+                <Group label="Calendar">
+                  {results.events.map((e) => (
+                    <ResultRow
+                      key={e.event_id}
+                      icon={CalendarClock}
+                      testid={`palette-result-event-${e.event_id}`}
+                      label={e.title}
+                      hint={new Date(e.start).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      onClick={() => { nav("/calendar"); onClose?.(); }}
+                    />
+                  ))}
+                </Group>
+              )}
+            </>
+          )}
+
+          {/* No search results and a query present -> capture fallback */}
+          {!hasResults && q.trim().length >= 2 && filteredActions.length === 0 && (
             <button
               onClick={submitFreeText}
               data-testid="palette-capture-fallback"
@@ -134,36 +227,66 @@ export default function CommandPalette({ open, onClose, onCheckin, onShutdown, o
               <span className="text-[14px]">Capture "<span className="font-display">{q}</span>"</span>
               <span className="ml-auto text-[11px] text-velari-textSoft">↵</span>
             </button>
-          ) : (
-            grouped.map(([section, items]) => (
-              <div key={section} className="py-1">
-                <div className="px-4 py-1.5 text-[10px] uppercase tracking-[0.22em] text-velari-textSoft">{section}</div>
-                {items.map((a) => {
-                  const Icon = a.icon;
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => run(a)}
-                      disabled={busy}
-                      data-testid={`palette-${a.id}`}
-                      className="w-full text-left px-4 py-2.5 hover:bg-velari-surfaceAlt flex items-center gap-3 disabled:opacity-50"
-                    >
-                      <Icon size={14} className="text-velari-textSoft" />
-                      <span className="text-[14px] flex-1">{a.label}</span>
-                      <ArrowRight size={12} className="text-velari-textSoft" />
-                    </button>
-                  );
-                })}
-              </div>
-            ))
+          )}
+
+          {/* Actions (filtered or full) */}
+          {filteredActions.length > 0 && (
+            <>
+              {hasResults && <div className="h-px bg-velari-border my-1" />}
+              {groupedActions.map(([section, items]) => (
+                <Group key={section} label={section}>
+                  {items.map((a) => {
+                    const Icon = a.icon;
+                    return (
+                      <button
+                        key={a.id}
+                        onClick={() => runAction(a)}
+                        disabled={busy}
+                        data-testid={`palette-${a.id}`}
+                        className="w-full text-left px-4 py-2.5 hover:bg-velari-surfaceAlt flex items-center gap-3 disabled:opacity-50 transition-colors"
+                      >
+                        <Icon size={14} className="text-velari-textSoft" />
+                        <span className="text-[14px] flex-1">{a.label}</span>
+                        <ArrowRight size={12} className="text-velari-textSoft" />
+                      </button>
+                    );
+                  })}
+                </Group>
+              ))}
+            </>
           )}
         </div>
 
         <div className="px-4 py-2.5 border-t border-velari-border text-[11px] text-velari-textSoft flex items-center justify-between">
-          <span>⌘K to toggle</span>
-          <span>↑ ↓ to browse</span>
+          <span className="flex items-center gap-1.5">
+            <Hash size={11} /> Universal search
+          </span>
+          <span>⌘K to toggle · ↵ to run</span>
         </div>
       </div>
     </div>
+  );
+}
+
+function Group({ label, children }) {
+  return (
+    <div className="py-1">
+      <div className="px-4 py-1.5 text-[10px] uppercase tracking-[0.22em] text-velari-textSoft">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function ResultRow({ icon: Icon, label, hint, testid, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={testid}
+      className="w-full text-left px-4 py-2.5 hover:bg-velari-surfaceAlt flex items-center gap-3 transition-colors"
+    >
+      <Icon size={14} className="text-velari-textSoft" />
+      <span className="text-[14px] flex-1 truncate">{label}</span>
+      {hint && <span className="text-[11px] text-velari-textSoft truncate max-w-[40%]">{hint}</span>}
+    </button>
   );
 }

@@ -13,6 +13,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Skeleton, SkeletonText } from "@/components/Skeleton";
 
 export default function Insights() {
   const [patterns, setPatterns] = useState(null);
@@ -73,7 +74,15 @@ export default function Insights() {
               </div>
             </div>
           ) : (
-            <div className="text-velari-textSoft italic font-editorial">Listening…</div>
+            <div className="space-y-4" data-testid="personality-loading">
+              <Skeleton className="h-10 w-48" />
+              <SkeletonText lines={2} />
+              <div className="grid grid-cols-3 gap-3">
+                <Skeleton className="h-12 rounded-lg" />
+                <Skeleton className="h-12 rounded-lg" />
+                <Skeleton className="h-12 rounded-lg" />
+              </div>
+            </div>
           )}
         </div>
 

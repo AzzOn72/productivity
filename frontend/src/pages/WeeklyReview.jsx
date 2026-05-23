@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { Sparkles, Plus, X, ArrowRight, ArrowLeft, Check, TrendingUp, TrendingDown, Sun, AlertTriangle } from "lucide-react";
+import ReviewCelebration from "@/components/ReviewCelebration";
 
 const STEPS = ["Wins", "Challenges", "Coaching", "Next week"];
 
@@ -34,6 +35,7 @@ export default function WeeklyReview() {
   const [draftChallenge, setDraftChallenge] = useState("");
   const [draftIntent, setDraftIntent] = useState("");
   const [insightLoading, setInsightLoading] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -73,7 +75,7 @@ export default function WeeklyReview() {
         energy_rating: energy,
         focus_rating: focus,
       });
-      toast.success("Week sealed. Onward.");
+      setCelebrate(true);
       setStep(0);
       setWins([]); setChallenges([]); setIntentions([]);
       const { data } = await api.get("/reviews");
@@ -237,6 +239,13 @@ export default function WeeklyReview() {
           </div>
         </div>
       )}
+
+      <ReviewCelebration
+        open={celebrate}
+        onClose={() => setCelebrate(false)}
+        summary={summary}
+        compare={compare}
+      />
     </div>
   );
 }

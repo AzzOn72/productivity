@@ -249,4 +249,29 @@
   animation-delay: -9s;
 }
 
+/* Page transition enter */
+@keyframes velari-page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.velari-page-enter {
+  animation: velari-page-enter 0.42s cubic-bezier(0.22, 0.8, 0.2, 1) both;
+  will-change: opacity, transform;
+}
+
+/* Confetti / success burst */
+@keyframes velari-rise {
+  0% { opacity: 0; transform: translateY(20px) scale(0.94); }
+  60% { opacity: 1; transform: translateY(-2px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.rise { animation: velari-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@keyframes velari-spark {
+  0% { opacity: 0; transform: translateY(8px) scale(0.6); }
+  60% { opacity: 1; transform: translateY(-4px) scale(1); }
+  100% { opacity: 0; transform: translateY(-22px) scale(1); }
+}
+.spark { animation: velari-spark 1.6s ease-out infinite; }
+
 [data-debug-wrapper="true"] { display: contents !important; }

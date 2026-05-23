@@ -615,7 +615,10 @@ async def list_events(current=Depends(get_current_user), start: Optional[str] = 
     q = {"user_id": current["user_id"]}
     events = await db.events.find(q, {"_id": 0}).to_list(500)
     if start and end:
-        events = [e for e in events if start <= e["start"] <= end or start <= e["end"] <= end]
+        events = [
+            e for e in events
+            if (start <= e["start"] <= end) or (start <= e["end"] <= end)
+        ]
     return events
 
 
@@ -901,7 +904,16 @@ async def ai_auto_plan(current=Depends(get_current_user)):
         # Add 15-min break between blocks
         cursor = ev_end + timedelta(minutes=15)
 
-    return {"created": created, "scheduled_minutes": total, "starts_at": base.isoformat()}
+    return {
+        "created": created,
+        "scheduled_minutes": total,
+        "starts_at": base.isoformat(),
+        "message": (
+            f"{created} block{'s' if created != 1 else ''} arranged across your day."
+            if created
+            else "It's late — nothing fits before 8pm today. Try planning for tomorrow morning."
+        ),
+    }
 
 
 # ============================================================
@@ -1113,6 +1125,9 @@ async def insights_weekly_compare(current=Depends(get_current_user)):
 @api.post("/billing/upgrade")
 async def billing_upgrade(payload: BillingUpgradeIn, current=Depends(get_current_user)):
     if payload.dev_mode:
+        # DEV ONLY: gate behind env so production deploys can't self-grant.
+        if os.environ.get("ENABLE_DEV_BILLING", "false").lower() != "true":
+            raise HTTPException(status_code=403, detail="Dev billing disabled. Use Stripe checkout.")
         await db.users.update_one(
             {"user_id": current["user_id"]},
             {"$set": {
@@ -1168,11 +1183,11 @@ async def list_goals(current=Depends(get_current_user)):
             "user_id": current["user_id"],
             "goal_id": g["goal_id"],
             "completed": True,
-            "completed_at": {"$gte": cutoff},
+            "created_at": {"$gte": cutoff},
         })
         g["tasks_total_14d"] = total
         g["tasks_done_14d"] = done
-        g["progress_pct"] = round((done / total) * 100) if total else 0
+        g["progress_pct"] = min(100, round((done / total) * 100)) if total else 0
     return goals
 
 
@@ -1795,6 +1810,47 @@ async def get_nudges(current=Depends(get_current_user)):
 
 
 # ============================================================
+# SEARCH — Universal smart search
+# ============================================================
+@api.get("/search")
+async def universal_search(q: str = "", current=Depends(get_current_user)):
+    """Search across tasks, goals, journal entries, and calendar events."""
+    needle = q.strip()
+    if not needle or len(needle) < 2:
+        return {"tasks": [], "goals": [], "journal": [], "events": [], "query": needle}
+    user_id = current["user_id"]
+    import re as _re
+    safe = _re.escape(needle)
+    pat = {"$regex": safe, "$options": "i"}
+
+    tasks = await db.tasks.find(
+        {"user_id": user_id, "$or": [{"title": pat}, {"notes": pat}]},
+        {"_id": 0, "task_id": 1, "title": 1, "notes": 1, "completed": 1, "priority": 1, "scheduled_for": 1},
+    ).sort("created_at", -1).limit(8).to_list(8)
+
+    goals = await db.goals.find(
+        {"user_id": user_id, "archived": {"$ne": True}, "$or": [{"title": pat}, {"why": pat}]},
+        {"_id": 0, "goal_id": 1, "title": 1, "why": 1, "color": 1},
+    ).limit(6).to_list(6)
+
+    journal = await db.journal.find(
+        {"user_id": user_id, "text": pat},
+        {"_id": 0, "entry_id": 1, "text": 1, "created_at": 1},
+    ).sort("created_at", -1).limit(5).to_list(5)
+    # Truncate long bodies
+    for j in journal:
+        if j.get("text") and len(j["text"]) > 140:
+            j["text"] = j["text"][:140] + "…"
+
+    events = await db.events.find(
+        {"user_id": user_id, "title": pat},
+        {"_id": 0, "event_id": 1, "title": 1, "start": 1, "kind": 1},
+    ).sort("start", -1).limit(5).to_list(5)
+
+    return {"tasks": tasks, "goals": goals, "journal": journal, "events": events, "query": needle}
+
+
+# ============================================================
 # HEALTH
 # ============================================================
 @api.get("/")
@@ -1807,18 +1863,18 @@ async def root():
 # ============================================================
 app.include_router(api)
 
-cors_origins = os.environ.get("CORS_ORIGINS", "*")
-if cors_origins == "*":
-    origin_list = ["*"]
-    allow_credentials = False  # browsers reject * + credentials
+cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
+if cors_origins_env.strip() == "*":
+    cors_origins = ["*"]
+    cors_allow_credentials = False  # browsers reject "*" + credentials
 else:
-    origin_list = [o.strip() for o in cors_origins.split(",")]
-    allow_credentials = True
+    cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    cors_allow_credentials = True
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=cors_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
