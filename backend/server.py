@@ -22,8 +22,13 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
-# Emergent LLM
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+# Groq AI (optional - will work without it)
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+    Groq = None
 
 # ============================================================
 # Config
@@ -493,24 +498,34 @@ async def delete_task(task_id: str, current=Depends(get_current_user)):
 async def quick_capture(payload: QuickCaptureIn, current=Depends(get_current_user)):
     """Parse natural language into a task using AI."""
     parsed = {"title": payload.text, "priority": "medium", "estimated_minutes": 30, "energy": "medium"}
-    try:
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"capture-{current['user_id']}-{uuid.uuid4().hex[:8]}",
-            system_message=(
-                "You parse short natural-language productivity inputs into a JSON object with keys: "
-                "title (string, cleaned), priority (low|medium|high|urgent), estimated_minutes (int), energy (low|medium|high). "
-                "Reply with ONLY valid JSON, no prose."
-            ),
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        reply = await chat.send_message(UserMessage(text=payload.text))
-        import json
-        import re
-        match = re.search(r"\{.*\}", reply, re.S)
-        if match:
-            parsed.update(json.loads(match.group(0)))
-    except Exception as e:
-        log.warning(f"quick-capture AI parse failed: {e}")
+    if GROQ_AVAILABLE:
+        try:
+            chat = _llm()
+            if chat:
+                response = chat.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You parse short natural-language productivity inputs into a JSON object with keys: "
+                                "title (string, cleaned), priority (low|medium|high|urgent), estimated_minutes (int), energy (low|medium|high). "
+                                "Reply with ONLY valid JSON, no prose."
+                            )
+                        },
+                        {"role": "user", "content": payload.text}
+                    ],
+                    temperature=0.5,
+                    max_tokens=512
+                )
+                reply = response.choices[0].message.content
+                import json
+                import re
+                match = re.search(r"\{.*\}", reply, re.S)
+                if match:
+                    parsed.update(json.loads(match.group(0)))
+        except Exception as e:
+            log.warning(f"quick-capture AI parse failed: {e}")
     task_in = TaskIn(
         title=parsed.get("title", payload.text)[:200],
         priority=parsed.get("priority", "medium"),
@@ -739,27 +754,41 @@ async def review_summary(current=Depends(get_current_user)):
 
 
 # ============================================================
-# AI ASSISTANT — Claude Sonnet 4.5 (via Emergent LLM)
+# AI ASSISTANT — Llama 3 via Groq (Free API)
 # ============================================================
-def _llm() -> LlmChat:
-    return LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=new_id("ai"),
-        system_message=(
-            "You are Velari — a calm, elite productivity coach. "
-            "Be terse. Be direct. Give plans, not explanations. "
-            "Default to bullets of 6 words or fewer. "
-            "Never apologize, never preface, never use emoji. "
-            "Speak as a trusted senior advisor: warm, precise, unhurried."
-        ),
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+def _llm():
+    if not GROQ_AVAILABLE:
+        return None
+    return Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
 
 @api.post("/ai/chat")
 async def ai_chat(payload: AIRequest, current=Depends(get_current_user)):
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     try:
         chat = _llm()
-        reply = await chat.send_message(UserMessage(text=payload.prompt))
+        if not chat:
+            raise HTTPException(status_code=501, detail="AI features are not available")
+        response = chat.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Velari — a calm, elite productivity coach. "
+                        "Be terse. Be direct. Give plans, not explanations. "
+                        "Default to bullets of 6 words or fewer. "
+                        "Never apologize, never preface, never use emoji. "
+                        "Speak as a trusted senior advisor: warm, precise, unhurried."
+                    )
+                },
+                {"role": "user", "content": payload.prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1024
+        )
+        reply = response.choices[0].message.content
         await db.ai_messages.insert_one({
             "user_id": current["user_id"],
             "prompt": payload.prompt,
@@ -776,6 +805,8 @@ async def ai_chat(payload: AIRequest, current=Depends(get_current_user)):
 @api.post("/ai/prioritize")
 async def ai_prioritize(current=Depends(get_current_user)):
     """Have the AI suggest a priority order for today's tasks."""
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     today = now_utc().date().isoformat()
     tasks = await db.tasks.find({
         "user_id": current["user_id"],
@@ -786,13 +817,21 @@ async def ai_prioritize(current=Depends(get_current_user)):
         return {"order": [], "reasoning": "No tasks scheduled today. Take a breath, then capture one meaningful intention."}
     summary = "\n".join([f"- {t['task_id']}: {t['title']} (priority={t.get('priority','medium')}, est={t.get('estimated_minutes',30)}m, energy={t.get('energy','medium')})" for t in tasks])
     chat = _llm()
+    if not chat:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     prompt = (
         f"User chronotype: {current.get('chronotype','balanced')}. Capacity: {current.get('daily_capacity',4)}h.\n"
         f"Tasks:\n{summary}\n\n"
         "Return JSON only: {order: [task_ids, hardest first], reasoning: '<= 14 words, no emoji'}."
     )
     try:
-        reply = await chat.send_message(UserMessage(text=prompt))
+        response = chat.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=512
+        )
+        reply = response.choices[0].message.content
         import json
         import re
         m = re.search(r"\{.*\}", reply, re.S)
@@ -805,6 +844,8 @@ async def ai_prioritize(current=Depends(get_current_user)):
 
 @api.post("/ai/plan-day")
 async def ai_plan_day(payload: AIPlanRequest, current=Depends(get_current_user)):
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     tasks = await db.tasks.find({
         "user_id": current["user_id"],
         "completed": False,
@@ -813,26 +854,46 @@ async def ai_plan_day(payload: AIPlanRequest, current=Depends(get_current_user))
     if not tasks:
         return {"plan": "No tasks scheduled. Consider a slow morning, a single deep work block, and a clean shutdown ritual."}
     chat = _llm()
+    if not chat:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     summary = "\n".join([f"- {t['title']} ({t.get('estimated_minutes',30)}m, {t.get('priority','medium')})" for t in tasks])
-    reply = await chat.send_message(UserMessage(text=(
+    prompt = (
         f"Plan {payload.date}. Chronotype: {current.get('chronotype','balanced')}. "
         f"Capacity: {current.get('daily_capacity',4)}h.\nTasks:\n{summary}\n\n"
         "Output 4-6 bullets, format: 'HH:MM-HH:MM — Task (≤ 5 words)'. "
         "Include one deep work block, one short break, and 'Shutdown' as the last bullet. No prose."
-    )))
+    )
+    response = chat.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=512
+    )
+    reply = response.choices[0].message.content
     return {"plan": reply}
 
 
 @api.get("/ai/weekly-insight")
 async def ai_weekly_insight(current=Depends(get_current_user)):
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     summary = await review_summary(current)
     chat = _llm()
-    reply = await chat.send_message(UserMessage(text=(
+    if not chat:
+        raise HTTPException(status_code=501, detail="AI features are not available")
+    prompt = (
         f"Past 7-day metrics: {summary}. "
         "Reply in exactly 3 short lines. Line 1: one warm observation. "
         "Line 2: the single biggest pattern to keep. Line 3: one precise next-week move. "
         "No headings, no emoji, no preamble."
-    )))
+    )
+    response = chat.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=512
+    )
+    reply = response.choices[0].message.content
     return {"insight": reply, "metrics": summary}
 
 
@@ -841,6 +902,8 @@ async def ai_weekly_insight(current=Depends(get_current_user)):
 # ============================================================
 @api.post("/ai/auto-plan")
 async def ai_auto_plan(current=Depends(get_current_user)):
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     today = now_utc().date().isoformat()
     tasks = await db.tasks.find({
         "user_id": current["user_id"],
@@ -1270,41 +1333,50 @@ async def checkin_history(current=Depends(get_current_user)):
 @api.post("/journal")
 async def create_journal(payload: JournalIn, current=Depends(get_current_user)):
     extracted_task_ids: List[str] = []
-    if payload.extract_tasks and payload.text.strip():
+    if payload.extract_tasks and payload.text.strip() and GROQ_AVAILABLE:
         try:
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=new_id("journal"),
-                system_message=(
-                    "Extract concrete actionable tasks from a journal entry. "
-                    "Return JSON only: {tasks: [{title, priority(low|medium|high|urgent), "
-                    "estimated_minutes(int), energy(low|medium|high)}]} — max 5 tasks. "
-                    "If no tasks, return {tasks: []}. No prose."
-                ),
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-            reply = await chat.send_message(UserMessage(text=payload.text))
-            import json
-            import re
-            m = re.search(r"\{.*\}", reply, re.S)
-            if m:
-                data = json.loads(m.group(0))
-                for t in (data.get("tasks") or [])[:5]:
-                    task = {
-                        "task_id": new_id("task"),
-                        "user_id": current["user_id"],
-                        "title": (t.get("title") or "").strip()[:200],
-                        "priority": t.get("priority", "medium"),
-                        "estimated_minutes": int(t.get("estimated_minutes") or 30),
-                        "energy": t.get("energy", "medium"),
-                        "completed": False,
-                        "source": "journal",
-                        "scheduled_for": now_utc().date().isoformat(),
-                        "created_at": now_utc().isoformat(),
-                        "completed_at": None,
-                    }
-                    if task["title"]:
-                        await db.tasks.insert_one(task)
-                        extracted_task_ids.append(task["task_id"])
+            chat = _llm()
+            if chat:
+                response = chat.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Extract concrete actionable tasks from a journal entry. "
+                                "Return JSON only: {tasks: [{title, priority(low|medium|high|urgent), "
+                                "estimated_minutes(int), energy(low|medium|high)}]} — max 5 tasks. "
+                                "If no tasks, return {tasks: []}. No prose."
+                            )
+                        },
+                        {"role": "user", "content": payload.text}
+                    ],
+                    temperature=0.5,
+                    max_tokens=512
+                )
+                reply = response.choices[0].message.content
+                import json
+                import re
+                m = re.search(r"\{.*\}", reply, re.S)
+                if m:
+                    data = json.loads(m.group(0))
+                    for t in (data.get("tasks") or [])[:5]:
+                        task = {
+                            "task_id": new_id("task"),
+                            "user_id": current["user_id"],
+                            "title": (t.get("title") or "").strip()[:200],
+                            "priority": t.get("priority", "medium"),
+                            "estimated_minutes": int(t.get("estimated_minutes") or 30),
+                            "energy": t.get("energy", "medium"),
+                            "completed": False,
+                            "source": "journal",
+                            "scheduled_for": now_utc().date().isoformat(),
+                            "created_at": now_utc().isoformat(),
+                            "completed_at": None,
+                        }
+                        if task["title"]:
+                            await db.tasks.insert_one(task)
+                            extracted_task_ids.append(task["task_id"])
         except Exception as e:
             log.warning(f"journal extract failed: {e}")
 
@@ -1340,6 +1412,8 @@ async def delete_journal(entry_id: str, current=Depends(get_current_user)):
 @api.post("/ai/now")
 async def ai_now(payload: NowRequest, current=Depends(get_current_user)):
     """Single-best-action prompt — the magical 'what should I do right now?'"""
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     today = now_utc().date().isoformat()
     open_tasks = await db.tasks.find({
         "user_id": current["user_id"],
@@ -1376,7 +1450,15 @@ async def ai_now(payload: NowRequest, current=Depends(get_current_user)):
     )
     try:
         chat = _llm()
-        reply = await chat.send_message(UserMessage(text=prompt))
+        if not chat:
+            raise HTTPException(status_code=501, detail="AI features are not available")
+        response = chat.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=512
+        )
+        reply = response.choices[0].message.content
         import json
         import re
         m = re.search(r"\{.*\}", reply, re.S)
@@ -1407,6 +1489,8 @@ async def ai_now(payload: NowRequest, current=Depends(get_current_user)):
 # ============================================================
 @api.post("/ai/decompose")
 async def ai_decompose(payload: DecomposeIn, current=Depends(get_current_user)):
+    if not GROQ_AVAILABLE:
+        raise HTTPException(status_code=501, detail="AI features are not available")
     parent = await db.tasks.find_one(
         {"task_id": payload.task_id, "user_id": current["user_id"]}, {"_id": 0}
     )
@@ -1424,7 +1508,15 @@ async def ai_decompose(payload: DecomposeIn, current=Depends(get_current_user)):
     created = []
     try:
         chat = _llm()
-        reply = await chat.send_message(UserMessage(text=prompt))
+        if not chat:
+            raise HTTPException(status_code=501, detail="AI features are not available")
+        response = chat.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=512
+        )
+        reply = response.choices[0].message.content
         import json
         import re
         m = re.search(r"\{.*\}", reply, re.S)
