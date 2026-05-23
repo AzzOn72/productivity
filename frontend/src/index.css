@@ -190,4 +190,63 @@
     linear-gradient(180deg, #050505 0%, #0d0d0d 100%);
 }
 
+/* Premium shadow utility */
+.shadow-soft {
+  box-shadow:
+    0 1px 0 0 hsl(var(--velari-border)),
+    0 1px 2px -1px rgba(20, 18, 16, 0.04),
+    0 12px 24px -18px rgba(20, 18, 16, 0.12);
+}
+.shadow-elevated {
+  box-shadow:
+    0 1px 0 0 hsl(var(--velari-border)),
+    0 2px 6px -2px rgba(20, 18, 16, 0.06),
+    0 24px 60px -30px rgba(20, 18, 16, 0.22);
+}
+.dark .shadow-soft {
+  box-shadow:
+    0 1px 0 0 hsl(0 0% 100% / 0.04),
+    0 8px 24px -8px rgba(0, 0, 0, 0.5);
+}
+.dark .shadow-elevated {
+  box-shadow:
+    0 1px 0 0 hsl(0 0% 100% / 0.05),
+    0 22px 60px -20px rgba(0, 0, 0, 0.7);
+}
+
+/* Soft card */
+.card-soft {
+  background: hsl(var(--velari-surface));
+  border: 1px solid hsl(var(--velari-border) / 0.7);
+  border-radius: 1.25rem;
+}
+.card-soft.elevated {
+  box-shadow:
+    0 1px 0 0 hsl(var(--velari-border)),
+    0 1px 2px -1px rgba(20, 18, 16, 0.04),
+    0 18px 40px -22px rgba(20, 18, 16, 0.14);
+}
+
+/* Ambient gradient background for Focus mode */
+@keyframes velari-aurora {
+  0%, 100% { transform: translate3d(0,0,0) rotate(0deg); }
+  50% { transform: translate3d(-2%, 2%, 0) rotate(2deg); }
+}
+.aurora::before, .aurora::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  filter: blur(60px);
+  opacity: 0.55;
+  animation: velari-aurora 18s ease-in-out infinite;
+}
+.aurora::before {
+  background: radial-gradient(40% 40% at 30% 35%, hsl(var(--velari-brand) / 0.45) 0%, transparent 70%);
+}
+.aurora::after {
+  background: radial-gradient(40% 40% at 70% 65%, hsl(var(--velari-sage) / 0.4) 0%, transparent 70%);
+  animation-delay: -9s;
+}
+
 [data-debug-wrapper="true"] { display: contents !important; }

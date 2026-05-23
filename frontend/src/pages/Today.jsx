@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Link } from "react-router-dom";
@@ -8,16 +8,27 @@ import {
   Sparkles,
   Sun,
   Cloud,
-  Moon,
+  Flame as FlameIcon,
   Target,
   Check,
   ArrowRight,
-  CircleDot,
-  Wind,
-  Flame,
   Leaf,
   ChevronRight,
+  Moon,
+  Wand2,
+  CalendarClock,
+  Zap,
 } from "lucide-react";
+import ClarityScore from "@/components/ClarityScore";
+import MomentumBar from "@/components/MomentumBar";
+import StreakBadge from "@/components/StreakBadge";
+import OverloadBanner from "@/components/OverloadBanner";
+import MorningRitual from "@/components/MorningRitual";
+import ShutdownRitual from "@/components/ShutdownRitual";
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const longDate = () =>
+  new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
 const greeting = () => {
   const h = new Date().getHours();
@@ -26,14 +37,10 @@ const greeting = () => {
   return "Good evening";
 };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
-const longDate = () =>
-  new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-
 const ENERGIES = [
   { id: "low", label: "Quiet", icon: Cloud },
   { id: "medium", label: "Steady", icon: Sun },
-  { id: "high", label: "Vivid", icon: Flame },
+  { id: "high", label: "Vivid", icon: FlameIcon },
 ];
 
 const PRIORITY_DOT = {
@@ -53,48 +60,85 @@ export default function Today() {
   const [energy, setEnergy] = useState("medium");
   const [quick, setQuick] = useState("");
   const [busyAI, setBusyAI] = useState(false);
+  const [busyPlan, setBusyPlan] = useState(false);
+  const [overload, setOverload] = useState(null);
+  const [streak, setStreak] = useState({ current: 0, longest: 0 });
+  const [momentum, setMomentum] = useState({ score: 0, label: "Quiet", components: { tasks: 0, focus: 0, habits: 0 } });
+  const [events, setEvents] = useState([]);
+  const [showMorning, setShowMorning] = useState(false);
+  const [showShutdown, setShowShutdown] = useState(false);
 
   const date = todayISO();
+  const capacity = (user?.daily_capacity || 4) * 60;
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
-      const [t, h, f] = await Promise.all([
+      const [t, h, f, m, s, ov, ev] = await Promise.all([
         api.get(`/tasks?day=${date}`),
         api.get("/habits"),
         api.get("/focus/today"),
+        api.get("/momentum"),
+        api.get("/streak"),
+        api.get("/ai/overload-check"),
+        api.get("/events"),
       ]);
       setTasks(t.data);
       setHabits(h.data);
       setFocusTotal(f.data.total_minutes || 0);
+      setMomentum(m.data);
+      setStreak(s.data);
+      setOverload(ov.data);
+      setEvents(ev.data.filter((e) => new Date(e.start).toDateString() === new Date().toDateString()));
     } catch (e) {
       toast.error(formatApiError(e));
     }
-  };
+  }, [date]);
 
+  useEffect(() => { load(); }, [load]);
+
+  // Morning ritual trigger: before noon, fresh visit, not yet planned
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const key = `velari_morning_${date}`;
+    if (typeof window === "undefined") return;
+    const seen = window.localStorage.getItem(key);
+    const h = new Date().getHours();
+    if (!seen && h < 12 && (user?.onboarded ?? false)) {
+      const timer = setTimeout(() => {
+        setShowMorning(true);
+        window.localStorage.setItem(key, "1");
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [date, user]);
 
   const open = useMemo(() => tasks.filter((t) => !t.completed), [tasks]);
   const done = useMemo(() => tasks.filter((t) => t.completed), [tasks]);
 
-  const orderedOpen = useMemo(() => {
-    if (!aiOrder) return open;
-    const map = new Map(open.map((t) => [t.task_id, t]));
-    const ordered = aiOrder.map((id) => map.get(id)).filter(Boolean);
-    const rest = open.filter((t) => !aiOrder.includes(t.task_id));
-    return [...ordered, ...rest];
+  // Top 3 — prefer AI order, otherwise priority then estimated_minutes desc
+  const topThree = useMemo(() => {
+    if (aiOrder && aiOrder.length) {
+      const map = new Map(open.map((t) => [t.task_id, t]));
+      return aiOrder.map((id) => map.get(id)).filter(Boolean).slice(0, 3);
+    }
+    const pr = { urgent: 0, high: 1, medium: 2, low: 3 };
+    return [...open]
+      .sort((a, b) => (pr[a.priority] ?? 2) - (pr[b.priority] ?? 2) || (b.estimated_minutes || 0) - (a.estimated_minutes || 0))
+      .slice(0, 3);
   }, [open, aiOrder]);
 
+  const restOpen = useMemo(() => {
+    const topIds = new Set(topThree.map((t) => t.task_id));
+    return open.filter((t) => !topIds.has(t.task_id));
+  }, [open, topThree]);
+
   const total = tasks.length;
-  const pct = total ? Math.round((done.length / total) * 100) : 0;
 
   const toggle = async (t) => {
     setTasks((ts) => ts.map((x) => (x.task_id === t.task_id ? { ...x, completed: !x.completed } : x)));
     try {
       await api.patch(`/tasks/${t.task_id}`, { completed: !t.completed });
       if (!t.completed) toast.success("Done. One quieter step.");
+      load();
     } catch (e) {
       toast.error(formatApiError(e));
       load();
@@ -129,14 +173,46 @@ export default function Today() {
     }
   };
 
+  const autoPlan = async () => {
+    setBusyPlan(true);
+    try {
+      const { data } = await api.post("/ai/auto-plan");
+      toast.success(`${data.created} focus block${data.created === 1 ? "" : "s"} arranged.`);
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setBusyPlan(false);
+    }
+  };
+
+  const shiftOverload = async () => {
+    // Move the lowest-priority open task to tomorrow
+    const pr = { urgent: 0, high: 1, medium: 2, low: 3 };
+    const sorted = [...open].sort((a, b) => (pr[b.priority] ?? 2) - (pr[a.priority] ?? 2));
+    const victim = sorted[0];
+    if (!victim) return;
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    try {
+      await api.patch(`/tasks/${victim.task_id}`, { scheduled_for: tomorrow.toISOString().slice(0, 10) });
+      toast.success(`Moved "${victim.title}" to tomorrow.`);
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
+
   const checkHabit = async (h) => {
     setHabits((arr) =>
       arr.map((x) =>
-        x.habit_id === h.habit_id ? { ...x, checked_today: !x.checked_today, streak: x.checked_today ? Math.max(0, x.streak - 1) : x.streak + 1 } : x,
+        x.habit_id === h.habit_id
+          ? { ...x, checked_today: !x.checked_today, streak: x.checked_today ? Math.max(0, x.streak - 1) : x.streak + 1 }
+          : x,
       ),
     );
     try {
       await api.post(`/habits/${h.habit_id}/check`, { date });
+      load();
     } catch (e) {
       toast.error(formatApiError(e));
       load();
@@ -154,12 +230,22 @@ export default function Today() {
     }
   };
 
+  const energySuggestion = useMemo(() => {
+    if (!topThree.length) return null;
+    const mapHr = (e) =>
+      e === "high" ? "9–11" : e === "medium" ? "11–13" : "15–17";
+    return topThree.map((t, i) => ({ ...t, window: mapHr(t.energy) }));
+  }, [topThree]);
+
   return (
     <div className="px-5 md:px-10 py-8 max-w-[1400px] mx-auto pb-28">
       {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-8 fade-up">
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-7 fade-up">
         <div>
-          <div className="text-[12px] uppercase tracking-[0.22em] text-velari-textSoft mb-2">{longDate()}</div>
+          <div className="text-[11px] uppercase tracking-[0.22em] text-velari-textSoft mb-2 flex items-center gap-2">
+            {longDate()}
+            <StreakBadge current={streak.current} longest={streak.longest} compact />
+          </div>
           <h1 className="font-display text-4xl sm:text-5xl tracking-tight">
             {greeting()},{" "}
             <span className="font-editorial italic text-velari-brand">
@@ -171,60 +257,229 @@ export default function Today() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 rounded-full bg-velari-surface border border-velari-border p-1.5">
-          {ENERGIES.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setEnergy(id)}
-              data-testid={`energy-${id}`}
-              className={`px-3 py-1.5 rounded-full text-[12.5px] flex items-center gap-1.5 transition-colors ${
-                energy === id ? "bg-velari-ink text-velari-cream" : "text-velari-textSoft hover:text-velari-text"
-              }`}
-            >
-              <Icon size={13} />
-              {label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-full bg-velari-surface border border-velari-border p-1">
+            {ENERGIES.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => setEnergy(id)}
+                data-testid={`energy-${id}`}
+                className={`px-3 py-1.5 rounded-full text-[12.5px] flex items-center gap-1.5 transition-colors ${
+                  energy === id ? "bg-velari-ink text-velari-cream" : "text-velari-textSoft hover:text-velari-text"
+                }`}
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setShowShutdown(true)}
+            data-testid="shutdown-trigger"
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-velari-border bg-velari-surface text-[12.5px] hover:bg-velari-surfaceAlt transition-colors"
+          >
+            <Moon size={13} /> Shutdown
+          </button>
         </div>
       </div>
 
-      {/* North star strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-7 fade-up">
-        <Stat label="Today's clarity" value={`${pct}%`} hint={`${done.length} of ${total || 0} done`} />
-        <Stat label="Focus today" value={`${Math.floor(focusTotal / 60)}h ${focusTotal % 60}m`} hint="quiet, accumulated" />
-        <Stat label="Habit streak" value={`${habits.reduce((a, h) => a + (h.streak || 0), 0)}d`} hint={`${habits.length} habits`} />
-        <Stat label="Plan" value={(user?.plan || "free").toUpperCase()} hint={user?.plan === "free" ? "upgrade to Pro" : "Thank you"} link={user?.plan === "free" ? "/pricing" : undefined} />
+      {/* Hero: Control Center */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-6 fade-up">
+        <div className="lg:col-span-8 card-soft elevated p-6 sm:p-7">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <ClarityScore
+              done={done.length}
+              total={total}
+              focusMinutes={focusTotal}
+              capacityMinutes={capacity}
+            />
+            <div className="flex flex-col justify-center gap-4">
+              <MomentumBar score={momentum.score} label={momentum.label} components={momentum.components} />
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={autoPlan}
+                  disabled={busyPlan || open.length === 0}
+                  data-testid="auto-plan-btn"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-velari-ink text-velari-cream text-[13px] disabled:opacity-40 hover:-translate-y-0.5 transition-transform ease-velari"
+                >
+                  <Wand2 size={13} /> {busyPlan ? "Arranging…" : "Auto-plan my day"}
+                </button>
+                <button
+                  onClick={prioritize}
+                  disabled={busyAI || open.length === 0}
+                  data-testid="ai-prioritize-btn"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-full bg-velari-surfaceAlt border border-velari-border text-[12.5px] hover:bg-velari-border/40 disabled:opacity-40 transition-colors"
+                >
+                  <Sparkles size={12} className="text-velari-brand" />
+                  {busyAI ? "Thinking…" : "AI reorder"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {overload && overload.overloaded && (
+            <div className="mt-5">
+              <OverloadBanner data={overload} onShift={shiftOverload} />
+            </div>
+          )}
+        </div>
+
+        <Link
+          to="/focus"
+          data-testid="enter-focus-card"
+          className="lg:col-span-4 group rounded-2xl border border-velari-ink/90 bg-velari-ink text-velari-cream p-6 relative overflow-hidden flex flex-col justify-between min-h-[200px] hover:-translate-y-1 transition-transform ease-velari shadow-elevated"
+        >
+          <div className="absolute -top-16 -right-12 h-44 w-44 rounded-full bg-velari-brand/35 blur-3xl pointer-events-none" />
+          <div className="absolute -bottom-16 -left-12 h-44 w-44 rounded-full bg-velari-sage/25 blur-3xl pointer-events-none" />
+          <div className="relative">
+            <div className="flex items-center gap-2 mb-2">
+              <Target size={14} className="text-velari-cream/80" />
+              <span className="text-[10.5px] uppercase tracking-[0.22em] opacity-70">Focus mode</span>
+            </div>
+            <div className="font-display text-2xl tracking-tight leading-tight">
+              One task. One breath.
+            </div>
+            <p className="text-[13px] opacity-70 mt-2 max-w-xs">
+              Cinematic deep work. Ambient gradient, soft countdown, flow indicator.
+            </p>
+          </div>
+          <div className="relative inline-flex items-center gap-1.5 text-[13px] font-medium opacity-90 group-hover:opacity-100">
+            Begin a session <ArrowRight size={13} className="group-hover:translate-x-0.5 transition-transform" />
+          </div>
+        </Link>
       </div>
 
-      {/* Three columns */}
+      {/* Top 3 — iconic priorities */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* Col 1: Habits + Energy + Quick capture */}
-        <div className="lg:col-span-3 space-y-5 fade-up">
-          <Panel>
-            <PanelHeader title="Habits" action={<button onClick={createHabit} className="text-velari-textSoft hover:text-velari-text" data-testid="add-habit-btn"><Plus size={15} /></button>} />
-            {habits.length === 0 && <Empty text="No habits yet. Start with one. Make it tiny." />}
-            <div className="space-y-2">
-              {habits.map((h) => (
-                <button
-                  key={h.habit_id}
-                  onClick={() => checkHabit(h)}
-                  data-testid={`habit-${h.habit_id}`}
-                  className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-velari-surfaceAlt transition-colors text-left"
-                >
-                  <div className={`h-7 w-7 rounded-full flex items-center justify-center border ${h.checked_today ? "bg-velari-brand border-velari-brand pop" : "border-velari-border"}`}>
-                    {h.checked_today ? <Check size={13} className="text-white" /> : <Leaf size={13} className="text-velari-textSoft" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[14px] truncate">{h.name}</div>
-                    <div className="text-[11px] text-velari-textSoft">{h.streak > 0 ? `${h.streak} day streak` : "Begin today"}</div>
-                  </div>
-                </button>
-              ))}
+        <section className="lg:col-span-8 fade-up">
+          <div className="card-soft elevated p-6 sm:p-7">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Top three</div>
+                <h3 className="font-display text-[22px] tracking-tight">Today's priorities</h3>
+              </div>
+              <Link to="/tasks" data-testid="see-all-tasks" className="text-[12.5px] text-velari-textSoft hover:text-velari-text inline-flex items-center gap-1">
+                All tasks <ChevronRight size={13} />
+              </Link>
             </div>
-          </Panel>
 
-          <Panel>
-            <PanelHeader title="Quick capture" />
+            {aiReason && (
+              <div className="mb-5 rounded-xl bg-velari-brand/8 border border-velari-brand/20 px-4 py-3 text-[13.5px] text-velari-text leading-relaxed">
+                <span className="text-[10px] uppercase tracking-[0.22em] text-velari-brand block mb-1">Velari said</span>
+                {aiReason}
+              </div>
+            )}
+
+            {topThree.length === 0 ? (
+              <Empty text="Today is open. What is the smallest thing that would feel meaningful?" />
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {topThree.map((t, i) => (
+                  <TopCard key={t.task_id} idx={i + 1} task={t} onToggle={() => toggle(t)} />
+                ))}
+              </div>
+            )}
+
+            {restOpen.length > 0 && (
+              <div className="mt-7">
+                <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft mb-2">Also today</div>
+                <ul className="space-y-1">
+                  {restOpen.map((t) => (
+                    <TaskRow key={t.task_id} task={t} onToggle={() => toggle(t)} />
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {done.length > 0 && (
+              <div className="mt-6">
+                <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft mb-2">Quiet wins</div>
+                <ul className="space-y-1">
+                  {done.map((t) => (
+                    <TaskRow key={t.task_id} task={t} onToggle={() => toggle(t)} muted />
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Right column: energy schedule + habits + quick capture */}
+        <aside className="lg:col-span-4 space-y-5 fade-up">
+          <div className="card-soft elevated p-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Energy schedule</div>
+              <Link to="/calendar" data-testid="open-cal" className="text-velari-textSoft hover:text-velari-text"><CalendarClock size={14} /></Link>
+            </div>
+            {energySuggestion && energySuggestion.length > 0 ? (
+              <ul className="space-y-2.5">
+                {energySuggestion.map((t) => (
+                  <li key={t.task_id} className="flex items-center gap-3" data-testid={`energy-row-${t.task_id}`}>
+                    <div className={`h-2 w-2 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} />
+                    <div className="text-[11px] font-display text-velari-textSoft w-12">{t.window}</div>
+                    <div className="text-[13.5px] truncate flex-1">{t.title}</div>
+                    <Zap size={11} className={`${t.energy === "high" ? "text-velari-brand" : t.energy === "medium" ? "text-velari-sage" : "text-velari-textSoft"}`} />
+                  </li>
+                ))}
+                {events.length > 0 && (
+                  <li className="pt-2 border-t border-velari-border/60 mt-3">
+                    <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft mb-2">Held on calendar</div>
+                    {events.slice(0, 3).map((ev) => (
+                      <div key={ev.event_id} className="flex items-center gap-2 text-[13px] py-1">
+                        <div className={`h-1.5 w-1.5 rounded-full ${ev.kind === "focus" ? "bg-velari-brand" : "bg-velari-sage"}`} />
+                        <div className="text-[11px] font-display text-velari-textSoft w-12">
+                          {new Date(ev.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                        </div>
+                        <div className="truncate flex-1">{ev.title}</div>
+                      </div>
+                    ))}
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <Empty text="Once you have tasks, your day will arrange itself." />
+            )}
+          </div>
+
+          <div className="card-soft p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Habits</div>
+              <button onClick={createHabit} className="text-velari-textSoft hover:text-velari-text" data-testid="add-habit-btn">
+                <Plus size={14} />
+              </button>
+            </div>
+            {habits.length === 0 ? (
+              <Empty text="No habits yet. Start with one — make it tiny." />
+            ) : (
+              <div className="space-y-2">
+                {habits.map((h) => (
+                  <button
+                    key={h.habit_id}
+                    onClick={() => checkHabit(h)}
+                    data-testid={`habit-${h.habit_id}`}
+                    className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-velari-surfaceAlt transition-colors text-left"
+                  >
+                    <div
+                      className={`h-7 w-7 rounded-full flex items-center justify-center border transition-colors ${
+                        h.checked_today ? "bg-velari-brand border-velari-brand pop" : "border-velari-border"
+                      }`}
+                    >
+                      {h.checked_today ? <Check size={13} className="text-white" /> : <Leaf size={12} className="text-velari-textSoft" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[14px] truncate">{h.name}</div>
+                      <div className="text-[11px] text-velari-textSoft">
+                        {h.streak > 0 ? `${h.streak} day streak` : "Begin today"}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card-soft p-6">
+            <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft mb-3">Quick capture</div>
             <form onSubmit={submitQuick}>
               <textarea
                 value={quick}
@@ -236,132 +491,74 @@ export default function Today() {
               />
               <button
                 type="submit"
-                data-testid="quick-capture-submit"
                 disabled={!quick.trim()}
+                data-testid="quick-capture-submit"
                 className="mt-2 w-full h-9 rounded-xl bg-velari-ink text-velari-cream text-[13.5px] flex items-center justify-center gap-1.5 disabled:opacity-40 hover:-translate-y-0.5 transition-transform ease-velari"
               >
                 <Sparkles size={13} /> Capture
               </button>
             </form>
-          </Panel>
-        </div>
-
-        {/* Col 2: Today's Priorities */}
-        <div className="lg:col-span-6 fade-up">
-          <Panel>
-            <PanelHeader
-              title="Today"
-              action={
-                <button
-                  onClick={prioritize}
-                  disabled={busyAI || open.length === 0}
-                  data-testid="ai-prioritize-btn"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] text-velari-text bg-velari-surfaceAlt hover:bg-velari-border transition-colors disabled:opacity-40"
-                >
-                  <Sparkles size={12} className="text-velari-brand" />
-                  {busyAI ? "Thinking…" : "AI prioritize"}
-                </button>
-              }
-            />
-
-            {aiReason && (
-              <div className="mb-4 rounded-xl bg-velari-brand/8 border border-velari-brand/25 p-3.5 text-[13px] text-velari-text leading-relaxed">
-                <span className="text-[10px] uppercase tracking-[0.2em] text-velari-brand block mb-1">Velari said</span>
-                {aiReason}
-              </div>
-            )}
-
-            {open.length === 0 && done.length === 0 && (
-              <Empty text="Today is open. What is the smallest thing that would feel meaningful?" />
-            )}
-
-            <ul className="space-y-1.5">
-              {orderedOpen.map((t, i) => (
-                <TaskRow key={t.task_id} task={t} idx={i + 1} onToggle={() => toggle(t)} />
-              ))}
-            </ul>
-
-            {done.length > 0 && (
-              <div className="mt-6">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-velari-textSoft mb-2">Quiet wins</div>
-                <ul className="space-y-1">
-                  {done.map((t) => (
-                    <TaskRow key={t.task_id} task={t} onToggle={() => toggle(t)} muted />
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <Link to="/tasks" data-testid="see-all-tasks" className="mt-5 inline-flex items-center gap-1 text-[13px] text-velari-textSoft hover:text-velari-text">
-              See all tasks <ChevronRight size={14} />
-            </Link>
-          </Panel>
-        </div>
-
-        {/* Col 3: Schedule + Focus */}
-        <div className="lg:col-span-3 space-y-5 fade-up">
-          <Panel>
-            <PanelHeader title="Schedule" action={<Link to="/calendar" className="text-velari-textSoft hover:text-velari-text" data-testid="open-cal"><ChevronRight size={15} /></Link>} />
-            <Schedule />
-          </Panel>
-
-          <div className="rounded-2xl border border-velari-border bg-velari-ink text-velari-cream p-5 relative overflow-hidden">
-            <div className="absolute -top-10 -right-10 h-32 w-32 rounded-full bg-velari-brand/40 blur-2xl pointer-events-none" />
-            <Target size={18} className="opacity-80 mb-3" />
-            <div className="font-display text-lg leading-tight">Enter focus.</div>
-            <div className="text-[12.5px] opacity-75 mt-1 mb-4">One task. One timer. One breath.</div>
-            <Link
-              to="/focus"
-              data-testid="enter-focus-btn"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-velari-cream text-velari-ink text-[13px] font-medium hover:-translate-y-0.5 transition-transform ease-velari"
-            >
-              Begin <ArrowRight size={13} />
-            </Link>
           </div>
-        </div>
+        </aside>
       </div>
-    </div>
-  );
-}
 
-function Panel({ children }) {
-  return <div className="rounded-2xl border border-velari-border bg-velari-surface p-5">{children}</div>;
-}
-
-function PanelHeader({ title, action }) {
-  return (
-    <div className="flex items-center justify-between mb-4">
-      <h3 className="font-display text-[15px] tracking-tight uppercase text-velari-textSoft" style={{ letterSpacing: "0.18em" }}>{title}</h3>
-      {action}
+      <MorningRitual
+        open={showMorning}
+        onClose={() => setShowMorning(false)}
+        onPlanned={() => load()}
+        defaultIntention={topThree[0]?.title || ""}
+      />
+      <ShutdownRitual open={showShutdown} onClose={() => setShowShutdown(false)} onSaved={() => load()} />
     </div>
   );
 }
 
 function Empty({ text }) {
-  return <div className="text-[13px] text-velari-textSoft italic font-editorial leading-relaxed py-2">{text}</div>;
+  return (
+    <div className="text-[13.5px] text-velari-textSoft italic font-editorial leading-relaxed py-2">{text}</div>
+  );
 }
 
-function Stat({ label, value, hint, link }) {
-  const inner = (
-    <div className="rounded-2xl border border-velari-border bg-velari-surface p-5 h-full flex flex-col justify-between">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-velari-textSoft">{label}</div>
-      <div>
-        <div className="font-display text-3xl tracking-tight">{value}</div>
-        <div className="text-[12px] text-velari-textSoft mt-1">{hint}</div>
+function TopCard({ idx, task, onToggle }) {
+  return (
+    <div
+      data-testid={`top-card-${task.task_id}`}
+      className="group rounded-2xl border border-velari-border bg-gradient-to-br from-velari-surface to-velari-surfaceAlt/40 p-5 flex flex-col gap-3 hover:-translate-y-1 transition-all ease-velari hover:shadow-soft"
+    >
+      <div className="flex items-center justify-between">
+        <div className="font-display text-[11px] text-velari-textSoft tracking-[0.18em]">
+          {String(idx).padStart(2, "0")}
+        </div>
+        <button
+          onClick={onToggle}
+          data-testid={`top-toggle-${task.task_id}`}
+          className={`h-6 w-6 rounded-full border flex items-center justify-center transition-colors ${
+            task.completed ? "bg-velari-brand border-velari-brand" : "border-velari-border hover:border-velari-text"
+          }`}
+        >
+          {task.completed && <Check size={13} className="text-white pop" />}
+        </button>
+      </div>
+      <div className={`font-display text-[17px] leading-snug tracking-tight ${task.completed ? "line-through text-velari-textSoft" : ""}`}>
+        {task.title}
+      </div>
+      <div className="mt-auto flex items-center justify-between text-[11.5px] text-velari-textSoft">
+        <div className="flex items-center gap-1.5">
+          <span className={`h-1.5 w-1.5 rounded-full ${PRIORITY_DOT[task.priority] || PRIORITY_DOT.medium}`} />
+          <span className="capitalize">{task.priority}</span>
+        </div>
+        <span>{task.estimated_minutes}m</span>
       </div>
     </div>
   );
-  if (link) return <Link to={link} data-testid="stat-link" className="hover:-translate-y-0.5 transition-transform ease-velari">{inner}</Link>;
-  return inner;
 }
 
-function TaskRow({ task, idx, onToggle, muted }) {
+function TaskRow({ task, onToggle, muted }) {
   return (
     <li
       data-testid={`task-row-${task.task_id}`}
-      className={`group flex items-center gap-3 p-2.5 rounded-xl hover:bg-velari-surfaceAlt/60 transition-colors`}
+      className="group flex items-center gap-3 p-2.5 rounded-xl hover:bg-velari-surfaceAlt/60 transition-colors"
     >
-      {idx && <div className="font-display text-[11px] w-5 text-velari-textSoft">{String(idx).padStart(2, "0")}</div>}
       <button
         onClick={onToggle}
         data-testid={`toggle-${task.task_id}`}
@@ -372,10 +569,9 @@ function TaskRow({ task, idx, onToggle, muted }) {
         {task.completed && <Check size={12} className="text-white pop" />}
       </button>
       <div className="flex-1 min-w-0">
-        <div className={`text-[14.5px] truncate ${task.completed ? "line-through text-velari-textSoft" : ""} ${muted ? "text-velari-textSoft" : ""}`}>
+        <div className={`text-[14px] truncate ${task.completed ? "line-through text-velari-textSoft" : ""} ${muted ? "text-velari-textSoft" : ""}`}>
           {task.title}
         </div>
-        {task.notes && !task.completed && <div className="text-[12px] text-velari-textSoft truncate">{task.notes}</div>}
       </div>
       {!task.completed && (
         <div className="flex items-center gap-2 text-[11px] text-velari-textSoft">
@@ -384,33 +580,5 @@ function TaskRow({ task, idx, onToggle, muted }) {
         </div>
       )}
     </li>
-  );
-}
-
-function Schedule() {
-  // Stylized day arc — illustrative timeline based on the hour
-  const now = new Date();
-  const hr = now.getHours();
-  const blocks = [
-    { t: "06–09", label: "Slow start", done: hr >= 9 },
-    { t: "09–12", label: "Deep work", done: hr >= 12 },
-    { t: "12–13", label: "Lunch & walk", done: hr >= 13 },
-    { t: "13–16", label: "Meetings", done: hr >= 16 },
-    { t: "16–18", label: "Wrap up", done: hr >= 18 },
-    { t: "18–22", label: "Shutdown & life", done: hr >= 22 },
-  ];
-  return (
-    <ul className="space-y-2.5">
-      {blocks.map((b) => {
-        const active = !b.done && hr >= parseInt(b.t.slice(0, 2));
-        return (
-          <li key={b.t} className="flex items-center gap-3">
-            <div className={`h-2 w-2 rounded-full ${active ? "bg-velari-brand animate-pulse" : b.done ? "bg-velari-border" : "bg-velari-sage/50"}`} />
-            <div className="text-[11px] font-display text-velari-textSoft w-14">{b.t}</div>
-            <div className={`text-[13.5px] ${active ? "text-velari-text font-medium" : b.done ? "line-through text-velari-textSoft" : ""}`}>{b.label}</div>
-          </li>
-        );
-      })}
-    </ul>
   );
 }

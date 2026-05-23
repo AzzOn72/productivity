@@ -51,8 +51,10 @@ export function AuthProvider({ children }) {
     await checkAuth();
   };
 
+  const updateUser = (patch) => setUser((u) => (u && typeof u === "object" ? { ...u, ...patch } : u));
+
   return (
-    <AuthContext.Provider value={{ user, setUser, loading, login, register, logout, refresh, formatApiError }}>
+    <AuthContext.Provider value={{ user, setUser, loading, login, register, logout, refresh, updateUser, formatApiError }}>
       {children}
     </AuthContext.Provider>
   );

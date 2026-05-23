@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Sparkles, Plus, X, ArrowRight, ArrowLeft, Check } from "lucide-react";
+import { Sparkles, Plus, X, ArrowRight, ArrowLeft, Check, TrendingUp, TrendingDown, Sun, AlertTriangle } from "lucide-react";
 
-const STEPS = ["Wins", "Challenges", "Reflection", "Next week"];
+const STEPS = ["Wins", "Challenges", "Coaching", "Next week"];
 
 function isoMonday() {
   const d = new Date();
@@ -13,8 +13,15 @@ function isoMonday() {
   return d.toISOString().slice(0, 10);
 }
 
+function fmtPct(p) {
+  if (p == null) return "—";
+  const sign = p > 0 ? "+" : "";
+  return `${sign}${p}%`;
+}
+
 export default function WeeklyReview() {
   const [summary, setSummary] = useState(null);
+  const [compare, setCompare] = useState(null);
   const [insight, setInsight] = useState("");
   const [step, setStep] = useState(0);
   const [wins, setWins] = useState([]);
@@ -31,9 +38,14 @@ export default function WeeklyReview() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, h] = await Promise.all([api.get("/reviews/summary"), api.get("/reviews")]);
+        const [s, h, c] = await Promise.all([
+          api.get("/reviews/summary"),
+          api.get("/reviews"),
+          api.get("/insights/weekly-compare"),
+        ]);
         setSummary(s.data);
         setHistory(h.data);
+        setCompare(c.data);
       } catch (e) { toast.error(formatApiError(e)); }
     })();
   }, []);
@@ -69,26 +81,72 @@ export default function WeeklyReview() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
+  const tasksDelta = compare?.deltas_pct?.tasks_done;
+  const focusDelta = compare?.deltas_pct?.focus_minutes;
+  const bestDay = compare?.best_day
+    ? new Date(compare.best_day._id + "T12:00:00").toLocaleDateString(undefined, { weekday: "long" })
+    : null;
+  const distraction = compare?.distraction_rate_pct ?? 0;
+
   return (
     <div className="px-5 md:px-10 py-8 max-w-[1100px] mx-auto pb-28">
-      <div className="mb-8 fade-up">
-        <div className="text-[12px] uppercase tracking-[0.22em] text-velari-textSoft mb-2">Weekly Review</div>
+      <div className="mb-7 fade-up">
+        <div className="text-[11px] uppercase tracking-[0.22em] text-velari-textSoft mb-2">Weekly Review</div>
         <h1 className="font-display text-4xl sm:text-5xl tracking-tight">A small ceremony for this week.</h1>
         <p className="text-velari-textSoft mt-2 text-[15px] max-w-xl">Five minutes to turn seven days into momentum.</p>
       </div>
 
-      {/* Summary metrics */}
-      {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 fade-up">
-          <Metric label="Tasks done" value={summary.tasks_done} />
-          <Metric label="Focus minutes" value={summary.focus_minutes} />
-          <Metric label="Focus sessions" value={summary.focus_sessions} />
-          <Metric label="Habits checked" value={summary.habit_checks} />
+      {/* Coaching banner — comparisons */}
+      {compare && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 fade-up">
+          <CoachStat
+            label="Tasks completed"
+            value={compare.this_week.tasks_done}
+            delta={tasksDelta}
+            note={tasksDelta == null ? "First reference week." : tasksDelta >= 0 ? "Trending up. Keep the rhythm." : "Quieter week. That's allowed."}
+          />
+          <CoachStat
+            label="Focus minutes"
+            value={compare.this_week.focus_minutes}
+            delta={focusDelta}
+            note={focusDelta == null ? "Start tracking focus." : focusDelta >= 0 ? "Deeper work this week." : "Less depth — protect a block."}
+          />
+          {bestDay ? (
+            <div className="card-soft elevated p-5">
+              <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Best productivity day</div>
+              <div className="mt-1 font-display text-2xl tracking-tight flex items-center gap-2">
+                <Sun size={18} className="text-velari-brand" />
+                {bestDay}
+              </div>
+              <div className="text-[12.5px] text-velari-textSoft mt-1">Most things crossed off. Notice when.</div>
+            </div>
+          ) : (
+            <div className="card-soft elevated p-5">
+              <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Best day</div>
+              <div className="mt-1 font-editorial italic text-[15px] text-velari-textSoft">No completed tasks yet.</div>
+            </div>
+          )}
+
+          {/* Distraction pattern */}
+          <div className="md:col-span-3 card-soft p-5 flex items-center gap-4">
+            <div className={`h-10 w-10 rounded-full flex items-center justify-center ${distraction > 30 ? "bg-velari-brand/15 text-velari-brand" : "bg-velari-sage/15 text-velari-sage"}`}>
+              <AlertTriangle size={16} />
+            </div>
+            <div className="flex-1">
+              <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">Distraction pattern</div>
+              <div className="font-display text-[16px] tracking-tight mt-0.5">
+                {distraction}% of focus sessions were interrupted.
+              </div>
+            </div>
+            <div className="text-[12.5px] text-velari-textSoft max-w-xs text-right">
+              {distraction === 0 ? "Clean focus all week. Beautiful." : distraction <= 25 ? "Healthy — most sessions held." : distraction <= 50 ? "Try one undistracted 50-minute block." : "Protect mornings. Notifications off."}
+            </div>
+          </div>
         </div>
       )}
 
       {/* Stepper */}
-      <div className="rounded-2xl border border-velari-border bg-velari-surface p-6 md:p-8 fade-up">
+      <div className="card-soft elevated p-6 md:p-8 fade-up">
         <div className="flex items-center gap-3 mb-7">
           {STEPS.map((s, i) => (
             <div key={s} className="flex items-center gap-2 flex-1">
@@ -116,12 +174,16 @@ export default function WeeklyReview() {
           </Section>
         )}
         {step === 2 && (
-          <Section title="Velari's reflection" hint="A calm view of your week.">
-            <div className="rounded-2xl bg-velari-brand/8 border border-velari-brand/25 p-5 leading-relaxed text-[14.5px] min-h-[120px]">
+          <Section title="Velari's reflection" hint="Three short lines. Take what's useful.">
+            <div className="rounded-2xl bg-gradient-to-br from-velari-brand/8 to-velari-sage/8 border border-velari-brand/20 p-5 leading-relaxed text-[14.5px] min-h-[140px] whitespace-pre-wrap">
               <div className="text-[10px] uppercase tracking-[0.22em] text-velari-brand mb-2 flex items-center gap-1.5">
                 <Sparkles size={11} /> Coach
               </div>
-              {insightLoading ? <div className="text-velari-textSoft text-[14px] italic">Reading your week…</div> : (insight || "—")}
+              {insightLoading ? (
+                <div className="text-velari-textSoft text-[14px] italic font-editorial">Reading your week…</div>
+              ) : (
+                insight || "—"
+              )}
             </div>
           </Section>
         )}
@@ -166,7 +228,7 @@ export default function WeeklyReview() {
           <div className="text-[11px] uppercase tracking-[0.22em] text-velari-textSoft mb-3">Past reviews</div>
           <div className="grid md:grid-cols-2 gap-3">
             {history.slice(0, 4).map((r) => (
-              <div key={r.review_id} className="rounded-2xl border border-velari-border bg-velari-surface p-5">
+              <div key={r.review_id} className="card-soft p-5">
                 <div className="text-[12px] text-velari-textSoft">Week of {r.week_of}</div>
                 <div className="font-display text-lg tracking-tight mt-1">{r.wins?.length || 0} wins · {r.challenges?.length || 0} challenges</div>
                 <div className="text-[12.5px] text-velari-textSoft mt-2">Energy {r.energy_rating}/10 · Focus {r.focus_rating}/10</div>
@@ -175,6 +237,25 @@ export default function WeeklyReview() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CoachStat({ label, value, delta, note }) {
+  const up = delta != null && delta >= 0;
+  return (
+    <div className="card-soft elevated p-5">
+      <div className="text-[10.5px] uppercase tracking-[0.22em] text-velari-textSoft">{label}</div>
+      <div className="mt-1 flex items-baseline gap-2">
+        <div className="font-display text-3xl tracking-tight">{value}</div>
+        {delta != null && (
+          <div className={`inline-flex items-center gap-0.5 text-[12px] font-medium ${up ? "text-velari-sage" : "text-velari-brand"}`}>
+            {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+            {fmtPct(delta)}
+          </div>
+        )}
+      </div>
+      <div className="text-[12.5px] text-velari-textSoft mt-1.5">{note}</div>
     </div>
   );
 }
@@ -238,14 +319,5 @@ function Slider({ label, value, onChange }) {
         <div className="font-display text-2xl w-10 text-right">{value}</div>
       </div>
     </label>
-  );
-}
-
-function Metric({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-velari-border bg-velari-surface p-5">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-velari-textSoft">{label}</div>
-      <div className="font-display text-3xl tracking-tight mt-1">{value}</div>
-    </div>
   );
 }

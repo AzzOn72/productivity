@@ -290,3 +290,182 @@ class TestAI:
         body = r.json()
         assert body.get("insight")
         assert "metrics" in body
+
+
+
+# ============================================================
+# V2 — Streak, Momentum, Overload, Auto-plan, Insights, Rituals, Billing
+# ============================================================
+class TestStreak:
+    def test_streak_shape(self, admin_client):
+        r = admin_client.get(f"{API}/streak")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "current" in body and "longest" in body
+        assert isinstance(body["current"], int) and body["current"] >= 0
+        assert isinstance(body["longest"], int) and body["longest"] >= 0
+
+
+class TestMomentum:
+    def test_momentum_shape(self, admin_client):
+        r = admin_client.get(f"{API}/momentum")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert set(["score", "label", "components", "raw"]).issubset(body.keys())
+        for k in ("tasks", "focus", "habits"):
+            assert k in body["components"]
+        assert 0 <= body["score"] <= 100
+        assert body["label"] in ("Quiet", "Warming", "In motion", "Flow")
+
+
+class TestOverloadCheck:
+    def test_overload_shape(self, admin_client):
+        r = admin_client.get(f"{API}/ai/overload-check")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k in ("overloaded", "ratio", "estimated_minutes", "capacity_minutes", "task_count", "suggestion"):
+            assert k in body
+        assert isinstance(body["overloaded"], bool)
+
+
+class TestAutoPlan:
+    def test_auto_plan_creates_focus_events_no_duplicates(self, admin_client):
+        # Seed a couple of tasks for today
+        today = time.strftime("%Y-%m-%d")
+        ids = []
+        for i in range(2):
+            r = admin_client.post(f"{API}/tasks", json={
+                "title": f"TEST_autoplan_{i}",
+                "priority": "high",
+                "estimated_minutes": 30,
+                "scheduled_for": today,
+            })
+            assert r.status_code == 200, r.text
+            ids.append(r.json()["task_id"])
+        try:
+            r1 = admin_client.post(f"{API}/ai/auto-plan", timeout=60)
+            assert r1.status_code == 200, r1.text
+            created1 = r1.json().get("created", 0)
+            assert created1 > 0, r1.text
+
+            # 2nd call should clear+regenerate (no duplicates)
+            events_before = admin_client.get(f"{API}/events").json()
+            focus_before = [e for e in events_before if e.get("kind") == "focus" and e.get("auto_generated")]
+            r2 = admin_client.post(f"{API}/ai/auto-plan", timeout=60)
+            assert r2.status_code == 200
+            events_after = admin_client.get(f"{API}/events").json()
+            focus_after = [e for e in events_after if e.get("kind") == "focus" and e.get("auto_generated")]
+            # Same count -> no duplicate explosion
+            assert len(focus_after) == len(focus_before), f"Duplicates: before={len(focus_before)} after={len(focus_after)}"
+
+            # Verify GET /api/events includes kind=focus + auto_generated=true
+            assert any(e.get("kind") == "focus" and e.get("auto_generated") for e in events_after)
+        finally:
+            for tid in ids:
+                admin_client.delete(f"{API}/tasks/{tid}")
+            # Clean auto-generated focus events created in this test
+            for e in admin_client.get(f"{API}/events").json():
+                if e.get("auto_generated") and e.get("kind") == "focus" and e.get("title", "").startswith("TEST_autoplan_"):
+                    admin_client.delete(f"{API}/events/{e['event_id']}")
+
+
+class TestWeeklyCompare:
+    def test_compare_shape(self, admin_client):
+        r = admin_client.get(f"{API}/insights/weekly-compare")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for k in ("this_week", "previous_week", "deltas_pct", "best_day", "distraction_rate_pct", "sessions_count"):
+            assert k in body, f"Missing key: {k}"
+        for k in ("tasks_done", "focus_minutes", "focus_sessions", "habits"):
+            assert k in body["this_week"]
+            assert k in body["previous_week"]
+
+
+class TestShutdownRitual:
+    def test_save_and_list(self, admin_client):
+        today = time.strftime("%Y-%m-%d")
+        r = admin_client.post(f"{API}/rituals/shutdown", json={
+            "date": today,
+            "wins": ["TEST_shutdown_win"],
+            "tomorrows_intention": "Ship Velari v2",
+            "energy": 8,
+        })
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["wins"] == ["TEST_shutdown_win"]
+        assert body["tomorrows_intention"] == "Ship Velari v2"
+
+        r = admin_client.get(f"{API}/rituals/shutdown")
+        assert r.status_code == 200
+        items = r.json()
+        assert any(it.get("ritual_id") == body["ritual_id"] for it in items)
+
+
+class TestBilling:
+    def test_dev_override_and_restore(self, admin_client):
+        # 1. Upgrade to pro via dev_mode=true
+        r = admin_client.post(f"{API}/billing/upgrade", json={"plan": "pro", "dev_mode": True})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["dev_override"] is True
+        assert body["user"]["plan"] == "pro"
+
+        # 2. Verify via /billing/plan
+        r = admin_client.get(f"{API}/billing/plan")
+        assert r.status_code == 200
+        assert r.json()["plan"] == "pro"
+
+        # 3. dev_mode=false should 501
+        r = admin_client.post(f"{API}/billing/upgrade", json={"plan": "pro", "dev_mode": False})
+        assert r.status_code == 501
+
+        # 4. Restore admin to elite
+        r = admin_client.post(f"{API}/billing/upgrade", json={"plan": "elite", "dev_mode": True})
+        assert r.status_code == 200
+        assert r.json()["user"]["plan"] == "elite"
+        r = admin_client.get(f"{API}/billing/plan")
+        assert r.json()["plan"] == "elite"
+
+    def test_create_checkout_mock(self, admin_client):
+        r = admin_client.post(f"{API}/billing/create-checkout", json={"plan": "pro", "dev_mode": False})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["mock"] is True
+
+
+class TestTightenedAIPrompts:
+    def test_prioritize_reasoning_is_short(self, admin_client):
+        t = admin_client.post(f"{API}/tasks", json={"title": "TEST_terse_prio", "priority": "high"}).json()
+        try:
+            r = admin_client.post(f"{API}/ai/prioritize", timeout=90)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            reasoning = data.get("reasoning", "")
+            assert isinstance(reasoning, str) and len(reasoning) > 0
+            # Allow up to 200 chars (target ≤140; mild slack for model variability)
+            assert len(reasoning) <= 200, f"Reasoning too long ({len(reasoning)} chars): {reasoning}"
+        finally:
+            admin_client.delete(f"{API}/tasks/{t['task_id']}")
+
+    def test_plan_day_returns_bullets(self, admin_client):
+        today = time.strftime("%Y-%m-%d")
+        t = admin_client.post(f"{API}/tasks", json={"title": "TEST_terse_plan", "priority": "high"}).json()
+        try:
+            r = admin_client.post(f"{API}/ai/plan-day", json={"date": today}, timeout=120)
+            assert r.status_code == 200, r.text
+            plan = r.json().get("plan", "")
+            assert plan
+            # Should look like bullets / structured plan
+            assert any(line.strip() for line in plan.splitlines())
+        finally:
+            admin_client.delete(f"{API}/tasks/{t['task_id']}")
+
+    def test_weekly_insight_short(self, admin_client):
+        r = admin_client.get(f"{API}/ai/weekly-insight", timeout=120)
+        assert r.status_code == 200, r.text
+        insight = r.json().get("insight", "")
+        assert insight
+        # Should be roughly 3 lines (allow some slack)
+        nonempty = [ln for ln in insight.splitlines() if ln.strip()]
+        assert 1 <= len(nonempty) <= 6, f"Unexpected line count: {len(nonempty)}\n{insight}"

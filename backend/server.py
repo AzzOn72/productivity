@@ -245,6 +245,20 @@ class QuickCaptureIn(BaseModel):
     text: str
 
 
+class BillingUpgradeIn(BaseModel):
+    plan: Literal["free", "pro", "elite"]
+    dev_mode: bool = False
+
+
+class ShutdownRitualIn(BaseModel):
+    date: str  # YYYY-MM-DD
+    wins: List[str] = []
+    tomorrows_intention: Optional[str] = ""
+    energy: int = 6
+    notes: Optional[str] = ""
+
+
+
 # ============================================================
 # AUTH — Email/Password JWT
 # ============================================================
@@ -684,10 +698,11 @@ def _llm() -> LlmChat:
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=new_id("ai"),
         system_message=(
-            "You are Velari, a calm, premium daily operating system AI coach. "
-            "You speak softly, with clarity and warmth. You help the user focus, plan, and reflect. "
-            "Keep answers concise, elegant, and emotionally aware. Never use emoji. "
-            "Format with short paragraphs and the occasional bullet list."
+            "You are Velari — a calm, elite productivity coach. "
+            "Be terse. Be direct. Give plans, not explanations. "
+            "Default to bullets of 6 words or fewer. "
+            "Never apologize, never preface, never use emoji. "
+            "Speak as a trusted senior advisor: warm, precise, unhurried."
         ),
     ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
@@ -724,10 +739,9 @@ async def ai_prioritize(current=Depends(get_current_user)):
     summary = "\n".join([f"- {t['task_id']}: {t['title']} (priority={t.get('priority','medium')}, est={t.get('estimated_minutes',30)}m, energy={t.get('energy','medium')})" for t in tasks])
     chat = _llm()
     prompt = (
-        f"User's chronotype: {current.get('chronotype','balanced')}. Daily capacity: {current.get('daily_capacity',4)}h.\n"
-        f"Tasks for today:\n{summary}\n\n"
-        "Return a JSON object with two keys: order (array of task_ids in the suggested order, most important first) "
-        "and reasoning (one short paragraph explaining the order with warmth). Respond with JSON only."
+        f"User chronotype: {current.get('chronotype','balanced')}. Capacity: {current.get('daily_capacity',4)}h.\n"
+        f"Tasks:\n{summary}\n\n"
+        "Return JSON only: {order: [task_ids, hardest first], reasoning: '<= 14 words, no emoji'}."
     )
     try:
         reply = await chat.send_message(UserMessage(text=prompt))
@@ -753,10 +767,10 @@ async def ai_plan_day(payload: AIPlanRequest, current=Depends(get_current_user))
     chat = _llm()
     summary = "\n".join([f"- {t['title']} ({t.get('estimated_minutes',30)}m, {t.get('priority','medium')})" for t in tasks])
     reply = await chat.send_message(UserMessage(text=(
-        f"Design a calm daily plan for {payload.date}. Chronotype: {current.get('chronotype','balanced')}. "
-        f"Capacity: {current.get('daily_capacity',4)} focus hours.\nTasks:\n{summary}\n\n"
-        "Give 4–6 time blocks with realistic timings, a single deep work block, breaks, and a shutdown ritual. "
-        "Format with bullet points, no headings, no JSON."
+        f"Plan {payload.date}. Chronotype: {current.get('chronotype','balanced')}. "
+        f"Capacity: {current.get('daily_capacity',4)}h.\nTasks:\n{summary}\n\n"
+        "Output 4-6 bullets, format: 'HH:MM-HH:MM — Task (≤ 5 words)'. "
+        "Include one deep work block, one short break, and 'Shutdown' as the last bullet. No prose."
     )))
     return {"plan": reply}
 
@@ -766,10 +780,327 @@ async def ai_weekly_insight(current=Depends(get_current_user)):
     summary = await review_summary(current)
     chat = _llm()
     reply = await chat.send_message(UserMessage(text=(
-        f"Past 7 days metrics: {summary}. "
-        "Write a 4-sentence reflective insight — warm, kind, with one concrete suggestion. No emoji."
+        f"Past 7-day metrics: {summary}. "
+        "Reply in exactly 3 short lines. Line 1: one warm observation. "
+        "Line 2: the single biggest pattern to keep. Line 3: one precise next-week move. "
+        "No headings, no emoji, no preamble."
     )))
     return {"insight": reply, "metrics": summary}
+
+
+# ============================================================
+# AUTO PLAN — Generates focus blocks across the day
+# ============================================================
+@api.post("/ai/auto-plan")
+async def ai_auto_plan(current=Depends(get_current_user)):
+    today = now_utc().date().isoformat()
+    tasks = await db.tasks.find({
+        "user_id": current["user_id"],
+        "completed": False,
+        "$or": [{"scheduled_for": today}, {"due_date": today}],
+    }, {"_id": 0}).sort("priority", 1).to_list(50)
+    if not tasks:
+        return {"created": 0, "message": "Nothing to plan. Capture one intention first."}
+
+    chrono = current.get("chronotype", "balanced")
+    start_hour = 9 if chrono == "morning" else 10 if chrono == "balanced" else 14
+    if chrono == "night":
+        start_hour = 18
+    capacity_min = (current.get("daily_capacity", 4) or 4) * 60
+
+    # Sort: urgent>high>medium>low; then larger estimates first within group for batching
+    pr_rank = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+    tasks.sort(key=lambda t: (pr_rank.get(t.get("priority", "medium"), 2), -int(t.get("estimated_minutes") or 30)))
+
+    # Clear previously auto-generated focus blocks for today
+    await db.events.delete_many({
+        "user_id": current["user_id"],
+        "kind": "focus",
+        "auto_generated": True,
+        "start": {"$gte": today + "T00:00:00", "$lt": today + "T23:59:59"},
+    })
+
+    now = now_utc()
+    base = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if base < now:
+        # Round up to next 15 minutes from now
+        minute = (now.minute // 15 + 1) * 15
+        base = now.replace(second=0, microsecond=0) + timedelta(minutes=(minute - now.minute))
+
+    cursor = base
+    end_of_day_cap = now.replace(hour=20, minute=0, second=0, microsecond=0)
+    total = 0
+    created = 0
+    for t in tasks:
+        if total >= capacity_min:
+            break
+        dur = max(15, min(int(t.get("estimated_minutes") or 30), 120))
+        if cursor + timedelta(minutes=dur) > end_of_day_cap:
+            break
+        ev_start = cursor
+        ev_end = cursor + timedelta(minutes=dur)
+        await db.events.insert_one({
+            "event_id": new_id("ev"),
+            "user_id": current["user_id"],
+            "title": t["title"],
+            "start": ev_start.isoformat(),
+            "end": ev_end.isoformat(),
+            "kind": "focus",
+            "task_id": t.get("task_id"),
+            "auto_generated": True,
+            "notes": "",
+            "created_at": now_utc().isoformat(),
+        })
+        created += 1
+        total += dur
+        # Add 15-min break between blocks
+        cursor = ev_end + timedelta(minutes=15)
+
+    return {"created": created, "scheduled_minutes": total, "starts_at": base.isoformat()}
+
+
+# ============================================================
+# OVERLOAD CHECK
+# ============================================================
+@api.get("/ai/overload-check")
+async def ai_overload_check(current=Depends(get_current_user)):
+    today = now_utc().date().isoformat()
+    tasks = await db.tasks.find({
+        "user_id": current["user_id"],
+        "completed": False,
+        "$or": [{"scheduled_for": today}, {"due_date": today}],
+    }, {"_id": 0}).to_list(100)
+    estimated = sum(int(t.get("estimated_minutes") or 30) for t in tasks)
+    capacity_min = (current.get("daily_capacity", 4) or 4) * 60
+    ratio = (estimated / capacity_min) if capacity_min else 0
+    overloaded = ratio > 1.1
+    return {
+        "overloaded": overloaded,
+        "ratio": round(ratio, 2),
+        "estimated_minutes": estimated,
+        "capacity_minutes": capacity_min,
+        "task_count": len(tasks),
+        "suggestion": "Move one task to tomorrow." if overloaded else "Realistic. You can do this.",
+    }
+
+
+# ============================================================
+# STREAK & MOMENTUM
+# ============================================================
+@api.get("/streak")
+async def get_streak(current=Depends(get_current_user)):
+    """A non-toxic streak: counts consecutive days with at least 1 task done OR 1 focus session OR 1 habit check."""
+    user_id = current["user_id"]
+    streak = 0
+    d = now_utc().date()
+    # Look back up to 365 days
+    for _ in range(365):
+        ds = d.isoformat()
+        next_ds = (d + timedelta(days=1)).isoformat()
+        had_task = await db.tasks.find_one({
+            "user_id": user_id, "completed": True,
+            "completed_at": {"$gte": ds, "$lt": next_ds + "T00:00:00"},
+        })
+        had_focus = await db.focus_sessions.find_one({
+            "user_id": user_id, "completed_minutes": {"$gt": 0},
+            "started_at": {"$gte": ds, "$lt": next_ds},
+        })
+        had_habit = await db.habit_checks.find_one({"user_id": user_id, "date": ds})
+        if had_task or had_focus or had_habit:
+            streak += 1
+            d = d - timedelta(days=1)
+        else:
+            # Allow today to be 0 yet — only break the streak if a past day was empty
+            if d == now_utc().date():
+                d = d - timedelta(days=1)
+                continue
+            break
+    longest = current.get("longest_streak", 0) or 0
+    if streak > longest:
+        await db.users.update_one({"user_id": user_id}, {"$set": {"longest_streak": streak}})
+        longest = streak
+    return {"current": streak, "longest": longest}
+
+
+@api.get("/momentum")
+async def get_momentum(current=Depends(get_current_user)):
+    """A 0-100 momentum score blending today's progress, focus, habits, and streak."""
+    user_id = current["user_id"]
+    today = now_utc().date().isoformat()
+    tomorrow = (now_utc().date() + timedelta(days=1)).isoformat()
+    total = await db.tasks.count_documents({
+        "user_id": user_id,
+        "$or": [{"scheduled_for": today}, {"due_date": today}],
+    })
+    done = await db.tasks.count_documents({
+        "user_id": user_id, "completed": True,
+        "$or": [{"scheduled_for": today}, {"due_date": today}],
+    })
+    focus = await db.focus_sessions.find({
+        "user_id": user_id, "started_at": {"$gte": today, "$lt": tomorrow},
+    }, {"_id": 0}).to_list(50)
+    focus_min = sum(int(s.get("completed_minutes") or 0) for s in focus)
+    habits_today = await db.habit_checks.count_documents({"user_id": user_id, "date": today})
+    capacity_min = (current.get("daily_capacity", 4) or 4) * 60
+
+    task_score = (done / total * 100) if total else 0
+    focus_score = min(100, (focus_min / capacity_min * 100) if capacity_min else 0)
+    habit_score = min(100, habits_today * 25)
+    score = round(0.45 * task_score + 0.4 * focus_score + 0.15 * habit_score)
+    if total == 0 and focus_min == 0 and habits_today == 0:
+        score = 0
+    label = "Quiet" if score < 25 else "Warming" if score < 55 else "In motion" if score < 85 else "Flow"
+    return {
+        "score": score,
+        "label": label,
+        "components": {
+            "tasks": round(task_score),
+            "focus": round(focus_score),
+            "habits": round(habit_score),
+        },
+        "raw": {
+            "tasks_done": done,
+            "tasks_total": total,
+            "focus_minutes": focus_min,
+            "habits_checked": habits_today,
+        },
+    }
+
+
+# ============================================================
+# SHUTDOWN RITUAL
+# ============================================================
+@api.post("/rituals/shutdown")
+async def save_shutdown(payload: ShutdownRitualIn, current=Depends(get_current_user)):
+    doc = {
+        "ritual_id": new_id("rit"),
+        "user_id": current["user_id"],
+        "kind": "shutdown",
+        **payload.model_dump(),
+        "created_at": now_utc().isoformat(),
+    }
+    await db.rituals.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/rituals/shutdown")
+async def list_shutdown(current=Depends(get_current_user)):
+    items = await db.rituals.find(
+        {"user_id": current["user_id"], "kind": "shutdown"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(30)
+    return items
+
+
+# ============================================================
+# INSIGHTS — Weekly comparison
+# ============================================================
+@api.get("/insights/weekly-compare")
+async def insights_weekly_compare(current=Depends(get_current_user)):
+    """Compare this week (last 7 days) vs previous week (8–14 days ago)."""
+    user_id = current["user_id"]
+    now = now_utc()
+    this_start = (now - timedelta(days=7)).isoformat()
+    prev_start = (now - timedelta(days=14)).isoformat()
+    prev_end = this_start
+
+    async def metrics(start, end=None):
+        q_tasks = {"user_id": user_id, "completed": True, "completed_at": {"$gte": start}}
+        if end:
+            q_tasks["completed_at"]["$lt"] = end
+        tasks_done = await db.tasks.count_documents(q_tasks)
+        q_focus = {"user_id": user_id, "started_at": {"$gte": start}}
+        if end:
+            q_focus["started_at"]["$lt"] = end
+        focus_sessions = await db.focus_sessions.find(q_focus, {"_id": 0}).to_list(500)
+        focus_min = sum(int(s.get("completed_minutes") or 0) for s in focus_sessions)
+        q_habits = {"user_id": user_id, "checked_at": {"$gte": start}}
+        if end:
+            q_habits["checked_at"]["$lt"] = end
+        habits = await db.habit_checks.count_documents(q_habits)
+        return {"tasks_done": tasks_done, "focus_minutes": focus_min, "focus_sessions": len(focus_sessions), "habits": habits}
+
+    this_week = await metrics(this_start)
+    prev_week = await metrics(prev_start, prev_end)
+
+    def delta(a, b):
+        if b == 0:
+            return None if a == 0 else 100
+        return round(((a - b) / b) * 100)
+
+    deltas = {
+        k: delta(this_week[k], prev_week[k]) for k in this_week
+    }
+
+    # Best day of this week (most tasks completed)
+    pipeline = [
+        {"$match": {"user_id": user_id, "completed": True, "completed_at": {"$gte": this_start}}},
+        {"$project": {"day": {"$substr": ["$completed_at", 0, 10]}}},
+        {"$group": {"_id": "$day", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 1},
+    ]
+    best = await db.tasks.aggregate(pipeline).to_list(1)
+    best_day = best[0] if best else None
+
+    # Distraction pattern: rate of interrupted focus sessions this week
+    sessions_q = await db.focus_sessions.find(
+        {"user_id": user_id, "started_at": {"$gte": this_start}}, {"_id": 0}
+    ).to_list(500)
+    interrupted = sum(1 for s in sessions_q if s.get("interrupted"))
+    distraction_rate = round((interrupted / len(sessions_q)) * 100) if sessions_q else 0
+
+    return {
+        "this_week": this_week,
+        "previous_week": prev_week,
+        "deltas_pct": deltas,
+        "best_day": best_day,
+        "distraction_rate_pct": distraction_rate,
+        "sessions_count": len(sessions_q),
+    }
+
+
+# ============================================================
+# BILLING — DEV mode override + mock checkout
+# ============================================================
+# DEV ONLY: When dev_mode=true, instantly grants the requested plan.
+# DO NOT ship this as production monetization. Replace with verified Stripe webhook.
+@api.post("/billing/upgrade")
+async def billing_upgrade(payload: BillingUpgradeIn, current=Depends(get_current_user)):
+    if payload.dev_mode:
+        await db.users.update_one(
+            {"user_id": current["user_id"]},
+            {"$set": {
+                "plan": payload.plan,
+                "plan_source": "dev_override",
+                "plan_updated_at": now_utc().isoformat(),
+            }},
+        )
+        user = await db.users.find_one({"user_id": current["user_id"]}, {"_id": 0, "password_hash": 0})
+        return {"ok": True, "dev_override": True, "user": user}
+    # Production placeholder: would create a Stripe Checkout Session here.
+    raise HTTPException(status_code=501, detail="Live billing not enabled yet. Use dev_mode=true.")
+
+
+@api.post("/billing/create-checkout")
+async def billing_create_checkout(payload: BillingUpgradeIn, current=Depends(get_current_user)):
+    """Mock Stripe checkout session — returns a fake URL the UI can simulate."""
+    return {
+        "checkout_url": None,  # in production this would be the Stripe Checkout URL
+        "mock": True,
+        "plan": payload.plan,
+        "user_id": current["user_id"],
+        "note": "Stripe not wired yet. Toggle dev_mode in /billing/upgrade to grant access.",
+    }
+
+
+@api.get("/billing/plan")
+async def billing_plan(current=Depends(get_current_user)):
+    return {
+        "plan": current.get("plan", "free"),
+        "plan_source": current.get("plan_source", "default"),
+        "plan_updated_at": current.get("plan_updated_at"),
+    }
 
 
 # ============================================================

@@ -1,0 +1,47 @@
+{
+  "summary": "Velari v2 full-stack regression. Backend: 30/30 pytest pass (19 v1 + 11 new v2 endpoints — /streak, /momentum, /ai/overload-check, /ai/auto-plan (incl. no-duplicate behaviour), /insights/weekly-compare, /rituals/shutdown, /billing/upgrade (dev override + 501 for live mode), /billing/create-checkout (mock), tightened AI prompts). Frontend: Today (clarity-score, momentum-bar, streak-badge, auto-plan-btn, ai-prioritize-btn, shutdown ritual modal save), Focus 2.0 (preset 25/50/90, focus-begin, timer decrements 24:59→24:54 over 5s, flow-score, toggle/mute/reset/exit), Weekly Review (CoachStat tiles with delta %, best day, distraction pattern), Pricing (Pro upgrade via dev_mode grants plan=pro, sidebar 'Unlock Pro' disappears) — all verified. Admin restored to plan=elite at the end via API.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/ai/auto-plan", "issue": "Time-window guard: if now() is past 20:00 UTC and chronotype is morning/balanced, `cursor` is rounded forward but `end_of_day_cap` is fixed at 20:00 of the same day — no events will be created. Not user-blocking but the response just returns created=0 with no explanation. Consider extending cap or returning a clear 'too late, plan for tomorrow' suggestion."},
+      {"endpoint": "/api/events GET", "issue": "Same v1 finding still present — boolean precedence in start/end filter (`start <= e['start'] <= end or start <= e['end'] <= end`). Frontend doesn't pass start/end so user-invisible."},
+      {"endpoint": "CORSMiddleware", "issue": "Same v1 finding — env-derived origin_list/allow_credentials computed but middleware hard-coded to allow_origins=['*'] / allow_credentials=False. Dead code branch. Cookie-auth from non-* origins would fail."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Pricing flow navigation", "issue": "After a successful dev upgrade, handleCTA calls navigate('/today') — UX is fine, but tooling/automation can't chain 'click pro then click elite' on the same page render. Working as designed; flagged only as awareness for future tests.", "affected_selectors": ["tier-cta-pro", "tier-cta-elite"]}
+    ],
+    "design_issues": [
+      {"screen": "Today (empty state)", "issues": ["When admin has 0 open tasks today, the Top Three card shows 'Today is open. What is the smallest thing that would feel meaningful?' but the Quick Capture input below has no visible focus glow on hover; minor — could nudge users toward capturing. Overload banner correctly hidden, energy schedule shows 'Once you have tasks, your day will arrange itself.' which is good."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Auto-plan: handle the 'after end_of_day_cap' edge case with a clearer message.",
+    "(Carry-over from v1) Tighten CORS — either honor CORS_ORIGINS env or remove the dead branch.",
+    "(Carry-over from v1) Fix /api/events GET start/end filter precedence."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to ~1180 lines with 9 new v2 routes. Strongly recommend splitting into routers (auth, tasks, habits, events, focus, reviews, ai, billing, insights, rituals) before v3.",
+    "/billing/upgrade dev override is correctly behind dev_mode=true and returns 501 otherwise — good. ENSURE this endpoint is removed or env-gated (e.g., ENABLE_DEV_BILLING) before any production deploy; right now any authenticated user can self-grant Elite.",
+    "/ai/auto-plan deletes prior auto_generated focus events scoped by date prefix on the `start` ISO string — works because all writes use timezone-aware isoformat starting with YYYY-MM-DDT. Fragile if a future writer ever stores naive or differently-offset timestamps. Consider storing a `plan_date` field instead of string-prefix matching.",
+    "/streak loops up to 365 iterations issuing 3 sequential awaits each → up to 1095 round-trips on a hot path. Acceptable now (sub-second on small data) but consider a single aggregation pipeline per collection then merge in Python.",
+    "/insights/weekly-compare delta() returns None for 0→0 — make sure frontend handles None gracefully (renders '—' instead of NaN%). Tile rendering looked fine in screenshots so the FE already handles it.",
+    "Tightened AI prompts (terse, ≤14 words, bullets, no preamble) verified — reasoning stayed under 200 chars in tests; weekly-insight returned ~3 short lines."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (added 11 new v2 test functions: TestStreak, TestMomentum, TestOverloadCheck, TestAutoPlan, TestWeeklyCompare, TestShutdownRitual, TestBilling, TestTightenedAIPrompts)"
+  ],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "100% on all v2 critical flows verified"},
+  "test_credentials": "Admin: founder@velari.app / VelariAdmin2026! — RESTORED to plan=elite after billing test.",
+  "seed_data_creation": "Added 1 shutdown ritual ('Shipped Velari v2' → 'Demo v2 to investors') to admin via frontend, plus pytest-class scoped TEST_ prefixed tasks/habits/events/focus/reviews/rituals (mostly self-cleaned). A couple of TEST_autoplan_* focus events may remain in admin's events from auto-plan no-duplicate verification — best-effort cleanup attempted.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v2 backend 30/30 green via /app/backend/tests/backend_test.py. Admin already has 1d streak (Longest: 1d), 75 focus minutes this week, several past reviews. /api/billing/upgrade is the live dev-grant path; pass dev_mode:true to bypass Stripe. Pricing page handleCTA navigates to /today on success — split tests that need to click two tiers in a row across two page loads. Focus mode (intent screen) shows focus-begin button labelled 'Enter focus'; focus-timer testid only appears AFTER clicking Enter focus.",
+  "rca of the issue": "No new bugs. All v1 carry-over issues (CORS dead branch, /events start/end precedence) remain non-blocking. The two minor 'restore plan' anomalies during the frontend test were test-script artifacts (navigate('/today') after upgrade) — admin plan was restored to elite via direct API at end of run. Verified: GET /api/billing/plan -> {plan:'elite', plan_source:'dev_override'}."
+}

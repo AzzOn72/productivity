@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { useAuth } from "@/context/AuthContext";
 import AIAssistant from "@/components/AIAssistant";
+import StreakBadge from "@/components/StreakBadge";
+import { api } from "@/lib/api";
 import {
   Sun,
   CalendarDays,
@@ -15,6 +17,7 @@ import {
   Sparkle,
   Moon,
   Plus,
+  Crown,
 } from "lucide-react";
 
 const NAV = [
@@ -30,6 +33,16 @@ export default function AppShell({ children }) {
   const navigate = useNavigate();
   const [aiOpen, setAiOpen] = useState(false);
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const [streak, setStreak] = useState({ current: 0, longest: 0 });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get("/streak");
+        setStreak(data);
+      } catch {}
+    })();
+  }, []);
 
   const toggleTheme = () => {
     document.documentElement.classList.toggle("dark");
@@ -103,7 +116,7 @@ export default function AppShell({ children }) {
           </button>
         </div>
 
-        <div className="m-3 p-3 rounded-2xl bg-velari-surface border border-velari-border" data-testid="sidebar-user">
+        <div className="m-3 p-3 rounded-2xl bg-velari-surface border border-velari-border space-y-2.5" data-testid="sidebar-user">
           <div className="flex items-center gap-2.5">
             <div className="h-8 w-8 rounded-full bg-velari-surfaceAlt flex items-center justify-center font-display text-[13px] overflow-hidden">
               {user?.picture ? (
@@ -120,6 +133,27 @@ export default function AppShell({ children }) {
               <LogOut size={15} />
             </button>
           </div>
+
+          {streak.current > 0 && (
+            <div className="flex items-center justify-between gap-2">
+              <StreakBadge current={streak.current} longest={streak.longest} compact />
+              <div className="text-[10.5px] text-velari-textSoft">Longest: {streak.longest}d</div>
+            </div>
+          )}
+
+          {(user?.plan === "free" || !user?.plan) && (
+            <Link
+              to="/pricing"
+              data-testid="sidebar-upgrade"
+              className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-velari-ink text-velari-cream hover:-translate-y-0.5 transition-transform ease-velari"
+            >
+              <div className="flex items-center gap-1.5">
+                <Crown size={12} className="text-velari-brand" />
+                <span className="text-[12px] tracking-tight">Unlock Pro</span>
+              </div>
+              <span className="text-[10.5px] opacity-70">$5/mo</span>
+            </Link>
+          )}
         </div>
       </aside>
 
