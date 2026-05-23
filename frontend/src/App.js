@@ -1,54 +1,75 @@
-import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
+import { AuthProvider } from "@/context/AuthContext";
+import ProtectedRoute from "@/components/ProtectedRoute";
+import { Toaster } from "sonner";
+import AppShell from "@/components/AppShell";
+
+import Landing from "@/pages/Landing";
+import Login from "@/pages/Login";
+import Signup from "@/pages/Signup";
+import AuthCallback from "@/pages/AuthCallback";
+import Onboarding from "@/pages/Onboarding";
+import Today from "@/pages/Today";
+import Tasks from "@/pages/Tasks";
+import CalendarPage from "@/pages/Calendar";
+import Focus from "@/pages/Focus";
+import WeeklyReview from "@/pages/WeeklyReview";
+import Pricing from "@/pages/Pricing";
+import Settings from "@/pages/Settings";
+
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+function AppRouter() {
+  const location = useLocation();
+  // Synchronously detect Emergent OAuth callback (URL fragment) — render BEFORE other routes
+  if (location.hash?.includes("session_id=")) {
+    return <AuthCallback />;
+  }
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
+      <Route path="/pricing" element={<Pricing />} />
 
-function App() {
+      <Route path="/onboarding" element={
+        <ProtectedRoute>
+          <Onboarding />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/today" element={<ProtectedRoute><AppShell><Today /></AppShell></ProtectedRoute>} />
+      <Route path="/tasks" element={<ProtectedRoute><AppShell><Tasks /></AppShell></ProtectedRoute>} />
+      <Route path="/calendar" element={<ProtectedRoute><AppShell><CalendarPage /></AppShell></ProtectedRoute>} />
+      <Route path="/focus" element={<ProtectedRoute><Focus /></ProtectedRoute>} />
+      <Route path="/review" element={<ProtectedRoute><AppShell><WeeklyReview /></AppShell></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><AppShell><Settings /></AppShell></ProtectedRoute>} />
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+export default function App() {
   return (
     <div className="App">
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
+        <AuthProvider>
+          <AppRouter />
+          <Toaster
+            position="top-center"
+            toastOptions={{
+              style: {
+                background: "hsl(var(--velari-surface))",
+                color: "hsl(var(--velari-text))",
+                border: "1px solid hsl(var(--velari-border))",
+                borderRadius: "12px",
+                fontFamily: "Manrope, ui-sans-serif",
+              },
+            }}
+          />
+        </AuthProvider>
       </BrowserRouter>
     </div>
   );
 }
-
-export default App;
