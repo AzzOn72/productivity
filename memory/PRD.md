@@ -58,6 +58,21 @@ A category-defining, browser-first daily operating system that competes with and
 - **Smart Nudges** (`/api/nudges`): up to 3 contextual prompts based on user state.
 - Tests: **42/42 backend + 100% frontend critical flows** (iteration_3.json).
 
+### v4.0 — 2026-02-23 (FINAL polish — production-ready)
+- **Universal search** (`GET /api/search?q=`): live, debounced inside the Command Palette. Searches tasks, goals, journal entries, and calendar events with regex-safe matching and result truncation. Renders dedicated `palette-result-task/goal/journal/event-{id}` rows.
+- **Page transitions**: a single `PageTransition` wrapper applies a 420ms fade-up between every authed route — no flicker, no jitter.
+- **Loading skeletons**: shimmering placeholders on Today's hero and Insights' personality card; resolves in <200ms on warm cache.
+- **Weekly Review celebration**: completing the stepper triggers a `ReviewCelebration` modal with soft sparks, a 3-stat summary tile (Done / Focus h / Habits), and an "See the trend" deeplink into Insights.
+- **404 page**: branded `NotFound` route — "This page is a quiet room." — keeps users in the system instead of redirecting to /.
+- **Active nav indicator**: 3-px animated brand-color left bar on the active sidebar item, with `duration-300 ease-velari` transitions.
+- **Backend hardening**:
+  - `/billing/upgrade` `dev_mode=true` now gated by `ENABLE_DEV_BILLING` env (defaults safe-off in prod). Startup logs the gate state for operator visibility.
+  - `/events` GET start/end filter properly parenthesised.
+  - `/goals` progress denominator and numerator both use `created_at` window; `progress_pct` capped at 100.
+  - `/ai/auto-plan` always returns a truthy `message` field — including a clear "too late today, try tomorrow" line for after-8pm edge case.
+  - CORS middleware now honors `CORS_ORIGINS` env (no dead branch).
+- Tests: **53/53 backend + 100% frontend critical assertions** (iteration_4.json). **No critical issues. Velari is production-ready.**
+
 ## Backlog
 ### P1 — Next iteration
 - Wire real **Stripe Checkout** (Pro $5 / Elite $15) — replace dev override; env-gate the dev path.

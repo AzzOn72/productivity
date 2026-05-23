@@ -1922,7 +1922,8 @@ async def on_startup():
         elif not verify_password(admin_password, existing.get("password_hash", "")):
             await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
             log.info(f"Updated admin password: {admin_email}")
-    log.info("Velari API ready.")
+    dev_billing = os.environ.get("ENABLE_DEV_BILLING", "false").lower() == "true"
+    log.info(f"ENABLE_DEV_BILLING={dev_billing} — Velari API ready.")
 
 
 @app.on_event("shutdown")
