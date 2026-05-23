@@ -1,0 +1,122 @@
+{
+  "project_name": "Velari",
+  "primary_archetype": "Organic & Earthy",
+  "secondary_archetype": "Swiss & High-Contrast",
+  "theme": "light_default_with_dark_mode",
+  "design_philosophy": "An intelligent daily operating system for life. Calming, luxurious, and addictive in a healthy way. Fuses organic warmth (sand, stone, sage) with architectural precision to outperform competitors like Sunsama and Notion Calendar.",
+  "global_rules": {
+    "test_attributes": "All interactive and key informational elements MUST include a data-testid attribute (e.g., data-testid='login-button').",
+    "anti_ai_patterns": "NO purple/violet gradients. NO generic Inter/Roboto for headings. NO centered uniform layouts. Prioritize asymmetry and tension in marketing, and modular density in dashboards.",
+    "accessibility": "Minimum 4.5:1 contrast for small text. Hover/focus states must be distinct."
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "Manrope",
+    "rules": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight leading-none",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight leading-tight",
+      "h3": "text-xl sm:text-2xl tracking-normal",
+      "body": "text-base leading-relaxed",
+      "overline": "text-xs tracking-[0.2em] uppercase font-bold",
+      "anti_default": "Never use default bold for everything. Use font-light for elegance or font-black for structural impact."
+    }
+  },
+  "colors": {
+    "light_mode": {
+      "background": "#F9F8F6", 
+      "surface": "#FFFFFF",
+      "surface_alt": "#F0EFEA",
+      "text_primary": "#1A1A1A",
+      "text_secondary": "#5C5C5C",
+      "border": "#E5E4E0",
+      "brand_primary": "#C86B52",
+      "brand_secondary": "#7B8B7B",
+      "focus_ring": "#C86B52"
+    },
+    "dark_mode": {
+      "background": "#0A0A0A",
+      "surface": "#161616",
+      "surface_alt": "#222222",
+      "text_primary": "#F0F0F0",
+      "text_secondary": "#A1A1A1",
+      "border": "#2A2A2A",
+      "brand_primary": "#D4826B",
+      "brand_secondary": "#8F9F8F",
+      "focus_ring": "#D4826B"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous Spacing (2-3x normal). Use p-6, p-8, p-12.",
+    "marketing_grid": "Bento Grid Mode A: Tetris Grid. Asymmetrical grid-cols-12, gap-8. Mix tall, wide, and square shapes. Leave intentional negative space.",
+    "dashboard_grid": "Control Room Grid Mode B: Dense but calm. grid-cols-4 or grid-cols-12. gap-6. All pixels utilized, uniform bottom alignment for rows.",
+    "radius": "Architectural corners. Parent containers rounded-2xl, inner cards rounded-xl. Buttons rounded-full or rounded-lg depending on context.",
+    "surfaces": {
+      "glassmorphism": "Only for sticky nav or focus mode. Light: bg-white/70 backdrop-blur-xl border-white/40. Dark: bg-black/60 backdrop-blur-xl border-white/10.",
+      "cards": "Flat background, 1px subtle border, NO default shadow. Hover: -translate-y-1 shadow-lg."
+    }
+  },
+  "motion": {
+    "philosophy": "Calm, deliberate, smooth.",
+    "transitions": "transition-all duration-300 cubic-bezier(0.2, 0.8, 0.2, 1)",
+    "hover_states": "Buttons lift slightly, backgrounds darken slightly. Text color explicitly set on hover."
+  },
+  "components": {
+    "buttons": "Primary: Solid brand color (Terracotta) with white text. Secondary: Outline with border-stone-200 and text-primary.",
+    "inputs": "Shadcn based. 1px border. Focus: ring-2 ring-offset-2 ring-brand_primary.",
+    "navigation": "Header must have glassmorphism background. Desktop links must be fully visible. Clean logo.",
+    "charts": "Recharts or Shadcn charts. Use brand_primary and brand_secondary for lines/bars. No default colors."
+  },
+  "screens": {
+    "landing_hero": "Bento layout hero. Left side: Massive H1 (Cabinet Grotesk), emotive subtitle, Primary CTA. Right side: Asymmetrical image grid showing UI mockups + 'hero_workspace' image. Use 'abstract_brand_art' as subtle floating elements.",
+    "today_dashboard": "The emotional center. Sidebar nav (collapsible). Top left: 'North Star' focus metric. Main area: 3 columns. Col 1: Habit check-ins & Energy state. Col 2: Today's Priorities (AI sorted). Col 3: Calendar schedule. Calm white cards on off-white background.",
+    "focus_mode": "Immersive, cinematic, fullscreen. 'focus_mode_bg' image with 50% opacity black/white overlay. Central large timer (Pomodoro). Current task in massive elegant typography. Ambient UI (hide everything else).",
+    "tasks": "Modular list view. Progressive disclosure (hide details until clicked). Priorities marked by subtle color tags. AI auto-prioritize button (shimmering Aceternity border style).",
+    "calendar": "Week/Day views. Drag-drop functionality. Focus blocks appear with striped or solid Terracotta backgrounds. Grid lines very subtle (border-opacity-30).",
+    "weekly_review": "Step-by-step modal flow. Step 1: Wins (Confetti/Success animations). Step 2: Unfinished tasks (Move or Delete). Step 3: AI Reflection (Insights in conversational UI). Step 4: Next week planning.",
+    "pricing": "3 tiers (Free, Pro $5, Elite $15). Elite tier uses 'Luxury' styling (darker card, glowing border, 'Tracing Beam' effect). Pro is highlighted. Clear comparison table below."
+  },
+  "media": {
+    "hero_workspace": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/4fd5d062-09fa-42b2-abd4-e7e2bb7da3f2/images/fd4eeb9fb662443e72d0818d21f250e6f4ae8a1a191053e6dcc626ebce28d2c3.png",
+      "description": "Wide-angle photograph of a serene, minimalist wooden desk bathed in soft morning sunlight.",
+      "usage": "Landing page hero section background or main feature image."
+    },
+    "focus_mode_bg": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/4fd5d062-09fa-42b2-abd4-e7e2bb7da3f2/images/ca79768da3bd447b2e838c9292c4444638042c53d8ef34ee9d375d2df15ccf74.png",
+      "description": "Abstract, blurred warm light filtering through linen fabric.",
+      "usage": "Immersive background for the Focus Mode screen."
+    },
+    "abstract_brand_art": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/4fd5d062-09fa-42b2-abd4-e7e2bb7da3f2/images/7f3333c84b4963fc70fbdfb833556fe1395541baba5e58a71198014ccfa06889.png",
+      "description": "Minimalist abstract 3D geometric shapes in warm sand and stone colors.",
+      "usage": "Landing page decorative elements or feature cards background."
+    },
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1767175620484-1ed37931a0d1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMG5ldXRyYWwlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3OTU1NDEwMXww&ixlib=rb-4.1.0&q=85",
+        "description": "Man in dark suit",
+        "usage": "Testimonial or user profile."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1758613654360-45f1ff78c0cf?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMG5ldXRyYWwlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3OTU1NDEwMXww&ixlib=rb-4.1.0&q=85",
+        "description": "Man with beard",
+        "usage": "Testimonial or user profile."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1770058443069-e384cd001e9b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMG5ldXRyYWwlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3OTU1NDEwMXww&ixlib=rb-4.1.0&q=85",
+        "description": "Young woman in black shirt",
+        "usage": "Testimonial or user profile."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the typography pairing: Cabinet Grotesk for Headings, Manrope for Body. Install these via Google Fonts or standard imports.",
+    "Do NOT use default Inter font.",
+    "Implement the Light mode color palette as the default. Use the exact hex codes provided for backgrounds, surfaces, and accents.",
+    "For the Landing page, do not use Shadcn layout components. Use pure HTML/Tailwind for bento grids to achieve asymmetry.",
+    "For the Dashboard, use heavily customized Shadcn components (1px borders, flat colors, no Vercel default shadows).",
+    "Ensure all images are implemented using the exact URLs from the media section. NEVER use placeholder services like via.placeholder.com.",
+    "All interactive elements MUST have data-testid attributes for QA.",
+    "Build the dashboard to feel like a high-end command center: dense but with clear negative space, utilizing the full grid width."
+  ]
+}
