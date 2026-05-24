@@ -77,7 +77,7 @@ export default function AppShell({ children }) {
   return (
     <div className="min-h-screen flex bg-velari-bg text-velari-text">
       {/* Sidebar */}
-      <aside className="hidden md:flex w-[244px] shrink-0 flex-col border-r border-velari-border bg-velari-bg/60" data-testid="app-sidebar">
+      <aside className="hidden md:flex fixed left-0 top-0 bottom-0 w-[244px] shrink-0 flex-col border-r border-velari-border bg-velari-bg/60 h-screen" data-testid="app-sidebar">
         <div className="px-6 pt-7 pb-6">
           <Link to="/today"><Logo /></Link>
         </div>
@@ -203,7 +203,7 @@ export default function AppShell({ children }) {
       </div>
 
       {/* Main */}
-      <main className="flex-1 min-w-0 pt-14 md:pt-0">
+      <main className="flex-1 min-w-0 pt-14 md:pt-0 md:ml-[244px]">
         {children}
       </main>
 
