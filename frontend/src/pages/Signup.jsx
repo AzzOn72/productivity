@@ -37,6 +37,12 @@ export default function Signup() {
     }
   };
 
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+  const googleLogin = () => {
+    const redirectUrl = window.location.origin + "/today";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-velari-bg">
       <div className="hidden lg:flex relative overflow-hidden border-r border-velari-border bg-velari-ink text-velari-cream">
@@ -74,6 +80,20 @@ export default function Signup() {
           <div className="w-full max-w-sm">
             <h1 className="font-display text-4xl tracking-tight mb-2">Begin Velari.</h1>
             <p className="text-velari-textSoft mb-10 text-[15px]">It takes about 90 seconds.</p>
+
+            <button
+              onClick={googleLogin}
+              data-testid="google-signup-btn"
+              className="w-full h-11 rounded-xl border border-velari-border bg-velari-surface hover:bg-velari-surfaceAlt transition-colors flex items-center justify-center gap-3 text-[14px]"
+            >
+              <GoogleGlyph />
+              Continue with Google
+            </button>
+
+            <div className="flex items-center gap-3 my-6 text-[12px] text-velari-textSoft uppercase tracking-[0.2em]">
+              <div className="h-px flex-1 bg-velari-border" /> or
+              <div className="h-px flex-1 bg-velari-border" />
+            </div>
 
             <form onSubmit={submit} className="space-y-3" data-testid="signup-form">
               <Field label="Your name" value={name} onChange={setName} testid="signup-name" />

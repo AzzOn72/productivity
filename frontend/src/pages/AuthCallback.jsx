@@ -13,9 +13,32 @@ export default function AuthCallback() {
     if (ran.current) return;
     ran.current = true;
 
-    // OAuth not available - redirect to login
-    nav("/login", { replace: true });
-  }, [nav]);
+    const hash = window.location.hash || "";
+    const m = hash.match(/session_id=([^&]+)/);
+    const sessionId = m ? decodeURIComponent(m[1]) : null;
+
+    // Clear hash immediately
+    window.history.replaceState(null, "", window.location.pathname);
+
+    if (!sessionId) {
+      nav("/login", { replace: true });
+      return;
+    }
+
+    (async () => {
+      try {
+        const { data } = await api.post(
+          "/auth/session",
+          { session_id: sessionId },
+          { headers: { "X-Session-ID": sessionId } },
+        );
+        setUser(data.user);
+        nav(data.user?.onboarded ? "/today" : "/onboarding", { replace: true });
+      } catch (e) {
+        nav("/login?error=session", { replace: true });
+      }
+    })();
+  }, [nav, setUser]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-velari-bg">
