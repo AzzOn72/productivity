@@ -32,7 +32,6 @@ export default function AuthCallback() {
           { session_id: sessionId },
           { headers: { "X-Session-ID": sessionId } },
         );
-        if (data.access_token) localStorage.setItem("velari_token", data.access_token);
         setUser(data.user);
         nav(data.user?.onboarded ? "/today" : "/onboarding", { replace: true });
       } catch (e) {
