@@ -420,8 +420,13 @@ async def emergent_session(request: Request, response: Response):
         max_age=7 * 86400, path="/",
     )
 
+    # Create JWT token for frontend
+    access = create_token(user_id, "access")
+    refresh = create_token(user_id, "refresh")
+    set_auth_cookies(response, access, refresh)
+
     user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
-    return {"user": user}
+    return {"user": user, "access_token": access}
 
 
 # ============================================================
